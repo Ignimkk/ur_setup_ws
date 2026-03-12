@@ -28,11 +28,11 @@
        UR 로봇 매크로 및 주변 장치 포함
        ================================================================ -->
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
-  <xacro:include filename="$(find ur_picking)/urdf/ur_to_robotiq_adapter.urdf.xacro"/>
+  <xacro:include filename="$(find ur_setup_bringup)/urdf/ur_to_robotiq_adapter.urdf.xacro"/>
   <xacro:include filename="$(find robotiq_description)/urdf/robotiq_2f_85_macro.urdf.xacro"/>
 
   <!-- 테스트베드 (페데스탈 + 플레이트) 매크로 포함 -->
-  <xacro:include filename="$(find ur_picking)/urdf/testbed.urdf.xacro"/>
+  <xacro:include filename="$(find ur_setup_bringup)/urdf/testbed.urdf.xacro"/>
 
   <!-- ================================================================
        UR 로봇 기본 인수
@@ -87,9 +87,9 @@
   <xacro:arg name="sim_ignition"           default="false"/>
   <xacro:arg name="simulation_controllers" default=""/>
 
-  <!-- 초기 자세 (ur_picking 패키지의 공통 파일 사용) -->
+  <!-- 초기 자세 (ur_setup_bringup 패키지의 공통 파일 사용) -->
   <xacro:arg name="initial_positions_file"
-    default="$(find ur_picking)/config/initial_positions.yaml"/>
+    default="$(find ur_setup_bringup)/config/initial_positions.yaml"/>
 
   <!-- ================================================================
        테스트베드 치수 인수
