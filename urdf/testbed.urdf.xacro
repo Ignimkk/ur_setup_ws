@@ -1,0 +1,201 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://wiki.ros.org/xacro">
+  <!--
+    testbed 매크로: 페데스탈(받침대) + 좌/우 작업 플레이트.
+
+    좌표계 설명:
+      - parent 링크는 world (세계 원점).
+      - 로봇 base_link는 world 에서 z = pedestal_z 위치에 마운트됨.
+      - 페데스탈 중심: (0, 0, pedestal_z/2)  [world 프레임]
+      - 플레이트 중심: (plate_x, plate_y, pedestal_z + plate_thickness/2) [world 프레임]
+        → 이 값은 로봇 base 프레임에서의 (plate_x, plate_y, plate_thickness/2) 와 동치임.
+
+    파라미터:
+      parent          : 연결할 부모 링크 이름 (기본: world)
+      pedestal_x      : 페데스탈 X 방향 길이 [m] (기본: 1.2)
+      pedestal_y      : 페데스탈 Y 방향 폭   [m] (기본: 0.6)
+      pedestal_z      : 페데스탈 높이         [m] (기본: 0.8)
+      pedestal_mass   : 페데스탈 질량         [kg] (기본: 150.0)
+      plate_size_x    : 플레이트 X 방향 길이  [m] (기본: 0.4)
+      plate_size_y    : 플레이트 Y 방향 폭    [m] (기본: 0.4)
+      plate_thickness : 플레이트 두께         [m] (기본: 0.02)
+      plate_mass      : 플레이트 1개 질량     [kg] (기본: 8.6)
+      plate_left_x    : 좌측 플레이트 중심 X  [m, robot base 프레임 기준] (기본: 0.45)
+      plate_left_y    : 좌측 플레이트 중심 Y  [m, robot base 프레임 기준] (기본: 0.35)
+      plate_right_x   : 우측 플레이트 중심 X  [m, robot base 프레임 기준] (기본: 0.45)
+      plate_right_y   : 우측 플레이트 중심 Y  [m, robot base 프레임 기준] (기본: -0.35)
+  -->
+  <xacro:macro name="testbed"
+    params="
+      parent:=world
+      pedestal_x:=1.8
+      pedestal_y:=1.0
+      pedestal_z:=0.8
+      pedestal_mass:=150.0
+      plate_size_x:=0.4
+      plate_size_y:=0.4
+      plate_thickness:=0.02
+      plate_mass:=8.6
+      plate_left_x:=0.45
+      plate_left_y:=0.35
+      plate_right_x:=-0.45
+      plate_right_y:=0.35">
+
+    <!-- ==============================================================
+         페데스탈 (받침대)
+         - 중심은 world 에서 (0, 0, pedestal_z/2) 위치.
+         - 상단 표면은 z = pedestal_z.
+         ============================================================== -->
+    <link name="pedestal_link">
+      <visual>
+        <origin xyz="0 0.2 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${pedestal_x} ${pedestal_y} ${pedestal_z}"/>
+        </geometry>
+        <material name="pedestal_gray">
+          <color rgba="0.35 0.35 0.35 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${pedestal_x} ${pedestal_y} ${pedestal_z}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <!-- 속이 빈 강철 받침대 근사: 전체 부피의 고체 박스로 관성 계산 -->
+        <mass value="${pedestal_mass}"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia
+          ixx="${(1.0/12.0) * pedestal_mass * (pedestal_y**2 + pedestal_z**2)}"
+          ixy="0" ixz="0"
+          iyy="${(1.0/12.0) * pedestal_mass * (pedestal_x**2 + pedestal_z**2)}"
+          iyz="0"
+          izz="${(1.0/12.0) * pedestal_mass * (pedestal_x**2 + pedestal_y**2)}"/>
+      </inertial>
+    </link>
+
+    <!--
+      parent → pedestal_link 조인트.
+      조인트 원점: parent(world) 기준으로 (0, 0, pedestal_z/2).
+      박스 링크 원점이 박스 중심이므로, 이렇게 배치하면
+      박스 하단이 z=0, 상단이 z=pedestal_z 가 됨.
+    -->
+    <joint name="pedestal_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="pedestal_link"/>
+      <origin xyz="0 0 ${pedestal_z/2}" rpy="0 0 0"/>
+    </joint>
+
+    <!-- Gazebo 재질: 어두운 회색, 마찰 계수 설정 -->
+    <gazebo reference="pedestal_link">
+      <material>Gazebo/DarkGrey</material>
+      <mu1>0.9</mu1>
+      <mu2>0.9</mu2>
+      <selfCollide>false</selfCollide>
+    </gazebo>
+
+    <!-- ==============================================================
+         좌측 작업 플레이트 (plate_left_link)
+         world 프레임 좌표: (plate_left_x, plate_left_y, pedestal_z + plate_thickness/2)
+         robot base 프레임 좌표: (plate_left_x, plate_left_y, plate_thickness/2)
+         ============================================================== -->
+    <link name="plate_left_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${plate_size_x} ${plate_size_y} ${plate_thickness}"/>
+        </geometry>
+        <material name="plate_aluminum">
+          <color rgba="0.78 0.78 0.78 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${plate_size_x} ${plate_size_y} ${plate_thickness}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <!-- 알루미늄 고체 플레이트 관성 -->
+        <mass value="${plate_mass}"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia
+          ixx="${(1.0/12.0) * plate_mass * (plate_size_y**2 + plate_thickness**2)}"
+          ixy="0" ixz="0"
+          iyy="${(1.0/12.0) * plate_mass * (plate_size_x**2 + plate_thickness**2)}"
+          iyz="0"
+          izz="${(1.0/12.0) * plate_mass * (plate_size_x**2 + plate_size_y**2)}"/>
+      </inertial>
+    </link>
+
+    <!--
+      parent → plate_left_link 조인트.
+      z 좌표: pedestal_z + plate_thickness/2
+        = 페데스탈 상단 + 플레이트 반두께
+        = 플레이트 중심이 페데스탈 상면에 정확히 안착함.
+    -->
+    <joint name="plate_left_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="plate_left_link"/>
+      <origin
+        xyz="${plate_left_x} ${plate_left_y} ${pedestal_z + plate_thickness/2}"
+        rpy="0 0 0"/>
+    </joint>
+
+    <!-- Gazebo 재질: 밝은 회색, 블록 안착을 위한 마찰 계수 -->
+    <gazebo reference="plate_left_link">
+      <material>Gazebo/Grey</material>
+      <mu1>0.8</mu1>
+      <mu2>0.8</mu2>
+      <selfCollide>false</selfCollide>
+    </gazebo>
+
+    <!-- ==============================================================
+         우측 작업 플레이트 (plate_right_link)
+         ============================================================== -->
+    <link name="plate_right_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${plate_size_x} ${plate_size_y} ${plate_thickness}"/>
+        </geometry>
+        <material name="plate_aluminum">
+          <color rgba="0.78 0.78 0.78 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="${plate_size_x} ${plate_size_y} ${plate_thickness}"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="${plate_mass}"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia
+          ixx="${(1.0/12.0) * plate_mass * (plate_size_y**2 + plate_thickness**2)}"
+          ixy="0" ixz="0"
+          iyy="${(1.0/12.0) * plate_mass * (plate_size_x**2 + plate_thickness**2)}"
+          iyz="0"
+          izz="${(1.0/12.0) * plate_mass * (plate_size_x**2 + plate_size_y**2)}"/>
+      </inertial>
+    </link>
+
+    <joint name="plate_right_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="plate_right_link"/>
+      <origin
+        xyz="${plate_right_x} ${plate_right_y} ${pedestal_z + plate_thickness/2}"
+        rpy="0 0 0"/>
+    </joint>
+
+    <gazebo reference="plate_right_link">
+      <material>Gazebo/Grey</material>
+      <mu1>0.8</mu1>
+      <mu2>0.8</mu2>
+      <selfCollide>false</selfCollide>
+    </gazebo>
+
+  </xacro:macro>
+</robot>

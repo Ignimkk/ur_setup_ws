@@ -1,0 +1,80 @@
+<?xml version="1.0"?>
+<!--
+  pick_block/model.sdf — Robotiq 2F-85 파지 대상 블록
+
+  치수: 0.04 x 0.04 x 0.08 m (4cm x 4cm x 8cm)
+    - Robotiq 2F-85 최대 개구 85mm 이내 → 4cm 면을 파지 가능
+    - 높이 8cm: 중간 지점에서 안정적 파지
+
+  좌표계: 모델 원점이 박스 하단 중심이 아닌 박스 중심임.
+    → spawn 시 -z 0.86 으로 지정하면 블록 중심이 z=0.86 에 놓임.
+    → 블록 하단은 z = 0.86 - 0.04 = 0.82 (플레이트 상면)
+
+  스폰 위치 (기본, world 프레임):
+    x=0.45, y=0.35, z=0.86  ← testbed 좌측 플레이트 위
+-->
+<sdf version="1.8">
+  <model name="pick_block">
+    <!-- pose 는 spawn 인수(-x -y -z -Y)로 오버라이드됨 -->
+    <pose>0 0 0 0 0 0</pose>
+    <link name="link">
+      <pose>0 0 0 0 0 0</pose>
+
+      <!-- ============================================================
+           관성 (알루미늄 밀도 기준, 질량 ~0.2 kg)
+           Ixx = Iyy = (1/12)*m*(y²+z²) = (1/12)*0.2*(0.0016+0.0064) = 1.333e-4
+           Izz        = (1/12)*m*(x²+y²) = (1/12)*0.2*(0.0016+0.0016) = 5.333e-5
+           ============================================================ -->
+      <inertial>
+        <mass>0.2</mass>
+        <inertia>
+          <ixx>1.333e-4</ixx>
+          <iyy>1.333e-4</iyy>
+          <izz>5.333e-5</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+
+      <!-- 충돌체: 실제 블록 크기와 동일 -->
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>0.04 0.04 0.08</size>
+          </box>
+        </geometry>
+        <surface>
+          <!-- 그리퍼 파지 시 미끄러짐 방지를 위한 높은 마찰 계수 -->
+          <friction>
+            <ode>
+              <mu>1.2</mu>
+              <mu2>1.2</mu2>
+            </ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>1e6</kp>
+              <kd>1e2</kd>
+            </ode>
+          </contact>
+        </surface>
+      </collision>
+
+      <!-- 시각화: 주황-빨간색 박스 (Gazebo에서 쉽게 식별) -->
+      <visual name="visual">
+        <geometry>
+          <box>
+            <size>0.04 0.04 0.08</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>1.0 0.35 0.1 1</ambient>
+          <diffuse>1.0 0.35 0.1 1</diffuse>
+          <specular>0.4 0.15 0.05 1</specular>
+        </material>
+      </visual>
+
+    </link>
+  </model>
+</sdf>
