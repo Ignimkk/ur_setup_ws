@@ -1,245 +1,224 @@
-# UR Picking Package (UR5e + Robotiq 2F-85)
+# ur_setup_bringup
 
-UR5e 로봇과 Robotiq 2F-85 그리퍼를 사용한 picking 모듈입니다.  
-ROS 2 Humble, MoveIt2, Ignition Gazebo(ros_gz_sim)를 사용하며,
+UR 로봇(UR5e / UR16e)과 Robotiq 2F-85 그리퍼를 Gazebo 시뮬레이션 환경에서 설정하고 스폰하기 위한 패키지입니다.
+URDF, SRDF, MoveIt2 설정, 컨트롤러 설정, 시뮬레이션 월드 파일을 포함하며, 외부 패키지 의존 없이 독립적으로 시뮬레이션 환경을 구성합니다.
 
-- **action 기반 제어**
-- **OMPL 플래너 선택 (RRT / RRT\* / RRTConnect)**
-- **Cartesian 경로 (computeCartesianPath)**
+---
 
-를 지원합니다.
+## 외부 의존 패키지
 
-이 패키지는 **외부 UR 시뮬/MoveIt 런치에 의존하지 않고**,  
-`ur_picking` 내부의 URDF/SRDF/ros2_control/컨트롤러/Gazebo/MoveIt 런치로
-완전히 독립적인 UR5e + Robotiq 2F-85 시뮬레이션 환경을 제공합니다.
+이 패키지를 사용하려면 아래 외부 패키지가 사전에 설치 및 빌드되어 있어야 합니다.
+
+### 1. ros2_robotiq_gripper
+
+Robotiq 2F-85 그리퍼의 URDF, ros2_control 하드웨어 인터페이스, 컨트롤러를 제공합니다.
+
+- 저장소: https://github.com/PickNikRobotics/ros2_robotiq_gripper
+- 필요 패키지: `robotiq_description`, `robotiq_controllers`, `robotiq_driver`
+
+```bash
+cd <your_ws>/src
+git clone https://github.com/PickNikRobotics/ros2_robotiq_gripper.git
+```
+
+### 2. Universal Robots ROS2 Driver (ur_robot_driver)
+
+실제 UR 로봇 하드웨어 연결 및 ros2_control 드라이버를 제공합니다. 시뮬레이션에서도 URDF 생성 및 컨트롤러 설정에 필요합니다.
+
+- 저장소: https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver
+- 필요 패키지: `ur_robot_driver`, `ur_description`, `ur_moveit_config`
+
+```bash
+sudo apt install ros-${ROS_DISTRO}-ur-robot-driver
+```
+
+또는 소스 빌드:
+
+```bash
+cd <your_ws>/src
+git clone -b humble https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver.git
+```
+
+### 3. ur_simulation_gz (UR Gazebo 시뮬레이션)
+
+Ignition Gazebo(ros_gz_sim) 기반 UR 시뮬레이션 플러그인 및 world 파일을 제공합니다. 이 패키지의 launch 파일은 내부적으로 `ur_simulation_gz`의 launch를 include하여 Gazebo를 실행합니다.
+
+- 저장소: https://github.com/UniversalRobots/Universal_Robots_ROS2_GZ_Simulation
+- 필요 패키지: `ur_simulation_gz`
+
+```bash
+sudo apt install ros-${ROS_DISTRO}-ur-simulation-gz
+```
+
+또는 소스 빌드:
+
+```bash
+cd <your_ws>/src
+git clone -b humble https://github.com/UniversalRobots/Universal_Robots_ROS2_GZ_Simulation.git
+```
+
+### 4. RealSense ROS2 (realsense-ros)
+
+Intel RealSense D435i 카메라 URDF 및 드라이버를 제공합니다. 카메라 브라켓 어댑터 URDF에서 카메라 메시 참조에 사용됩니다.
+
+- 저장소: https://github.com/IntelRealSense/realsense-ros
+- 필요 패키지: `realsense2_description`
+
+```bash
+sudo apt install ros-${ROS_DISTRO}-realsense2-description
+```
 
 ---
 
 ## 패키지 구조
 
-```bash
-ur_picking/
+```
+ur_setup_bringup/
 ├── CMakeLists.txt
 ├── package.xml
 ├── README.md
-├── action/
-│   └── MoveToPose.action                # Pose 기반 커스텀 Action
 ├── config/
-│   ├── picking_params.yaml              # (옵션) Picking 파라미터
-│   ├── initial_positions.yaml           # UR 초기 관절 각도
-│   ├── ur5e/
-│   │   ├── default_kinematics.yaml
-│   │   ├── joint_limits.yaml
-│   │   ├── physical_parameters.yaml
-│   │   └── visual_parameters.yaml
-│   └── ur5e_robotiq_2f85_controllers.yaml  # UR + Robotiq ros2_control 컨트롤러
-├── include/
-│   └── ur_picking/
+│   ├── initial_positions.yaml               # UR 초기 관절 각도 (시뮬 스폰 시 적용)
+│   ├── kinematics.yaml                      # MoveIt2용 kinematics solver 설정
+│   ├── ur5e_robotiq_2f85_controllers.yaml   # UR5e + Robotiq 2F-85 ros2_control 컨트롤러 설정
+│   └── ur5e/
+│       ├── default_kinematics.yaml          # UR5e DH 파라미터 기반 기본 기구학
+│       ├── joint_limits.yaml                # UR5e 관절 속도/가속도 제한
+│       ├── physical_parameters.yaml         # UR5e 물리 파라미터 (질량, 관성 등)
+│       └── visual_parameters.yaml           # UR5e 시각화 파라미터 (메시 경로 등)
 ├── launch/
-│   ├── ur_picking.launch.py             # Picking 노드 런치
-│   └── ur_sim_moveit_robotiq.launch.py  # UR+Robotiq + Gazebo + MoveIt 통합 런치
+│   ├── ur_sim_moveit_robotiq.launch.py      # UR5e + Robotiq + Gazebo + MoveIt2 통합 런치
+│   └── ur_sim_moveit_robotiq_ur16e.launch.py # UR16e + Robotiq + 테스트베드 + MoveIt2 통합 런치
+├── meshes/
+│   ├── bracket/
+│   │   └── ur_D435i_BRACKET.STL             # D435i 카메라 마운트 브라켓 메시
+│   └── camera/
+│       └── d435.dae                         # RealSense D435i 카메라 외형 메시
+├── models/
+│   └── pick_block/
+│       └── model.sdf                        # Gazebo 스폰용 블록 오브젝트 SDF 모델
+├── rviz/
+│   └── robot_model.rviz                     # MoveIt2 RViz 설정 파일
 ├── srdf/
-│   └── ur_robotiq.srdf.xacro            # UR + Robotiq용 MoveIt SRDF (충돌 설정 포함)
+│   └── ur_robotiq.srdf.xacro               # UR + Robotiq 통합 MoveIt2 SRDF
+│                                            # (planning group, end-effector, 충돌 제외 설정 포함)
 ├── urdf/
-│   ├── ur5e_robotiq_2f85.urdf.xacro     # UR5e + Robotiq 통합 URDF/XACRO
-│   └── ur_to_robotiq_adapter.urdf.xacro # UR tool0 ↔ Robotiq 어댑터 링크
-└── src/
-    ├── ur_picking_node.cpp              # Action Server (MoveIt2 계획 + 궤적 실행)
-    └── goal_receive_node.cpp            # Action Client (외부 토픽 ↔ Action 중계)
+│   ├── ur5e_robotiq_2f85.urdf.xacro        # UR5e + Robotiq 2F-85 통합 URDF
+│   ├── ur16e_robotiq_2f85.urdf.xacro       # UR16e + Robotiq 2F-85 통합 URDF
+│   ├── testbed.urdf.xacro                  # 테스트베드(작업대) 환경 URDF
+│   ├── camera_bracket_adapter.urdf.xacro   # D435i 카메라 + 브라켓 어댑터 링크 URDF
+│   └── ur_to_robotiq_adapter.urdf.xacro    # UR tool0 -> Robotiq 마운트 어댑터 링크 URDF
+└── worlds/
+    └── testbed.sdf                          # 테스트베드 환경 Gazebo 월드 파일
 ```
 
 ---
 
-## 시스템 아키텍처
+## 주요 파일 설명
 
-### 1. 시뮬레이션 + MoveIt + 그리퍼
+### URDF
 
-`ur_sim_moveit_robotiq.launch.py` 가 다음을 한 번에 띄웁니다.
+| 파일 | 설명 |
+|---|---|
+| `ur5e_robotiq_2f85.urdf.xacro` | UR5e 본체에 어댑터 링크와 Robotiq 2F-85를 연결한 완전 통합 URDF. ros2_control 태그 포함. |
+| `ur16e_robotiq_2f85.urdf.xacro` | UR16e 기반 동일 구조. 대형 페이로드 환경 대응. |
+| `ur_to_robotiq_adapter.urdf.xacro` | UR `tool0` 프레임과 Robotiq `robotiq_85_base_link` 사이의 오프셋 어댑터 링크. |
+| `camera_bracket_adapter.urdf.xacro` | D435i 카메라와 전용 브라켓을 로봇에 부착하기 위한 어댑터 링크. |
+| `testbed.urdf.xacro` | 작업용 테이블/선반 구조물 URDF. UR16e 런치에서 world와 함께 스폰. |
 
-- Ignition Gazebo + ros_gz_bridge
-- UR5e + Robotiq 2F-85 통합 URDF (`ur5e_robotiq_2f85.urdf.xacro`)
-- ros2_control + 컨트롤러:
-  - `joint_state_broadcaster`
-  - `joint_trajectory_controller` (팔 제어)
-  - `robotiq_gripper_controller` (GripperActionController, 그리퍼 제어)
-- MoveIt2:
-  - `move_group` 노드
-  - Servo 노드 (옵션)
-  - MoveIt RViz (`view_robot.rviz`)
+### SRDF
 
-`robot_description` / `robot_description_semantic` 는 모두 런치 내부에서  
-Xacro + `ParameterValue(..., value_type=str)` 를 사용해 일관되게 설정합니다.
+| 파일 | 설명 |
+|---|---|
+| `ur_robotiq.srdf.xacro` | MoveIt2가 필요로 하는 로봇 시맨틱 정보 정의. planning group(`ur_manipulator`, `gripper`), end-effector, 홈 포지션, 자가충돌 제외 링크 쌍 포함. |
 
-### 2. Picking 노드
+### Config
 
-1. **goal_receive_node** (Action Client)
-   - `/move_goal` 토픽을 구독하여 외부에서 보낸 목표 Pose 수신
-   - 수신한 Pose를 `MoveToPose` Action Goal(`target_pose`)로 변환하여 `ur_picking_node`에 전송
-   - Action 서버로부터 받은 feedback/result를 `/current_state`(std_msgs/String)로 퍼블리시
+| 파일 | 설명 |
+|---|---|
+| `initial_positions.yaml` | Gazebo 시뮬 스폰 시 적용되는 UR 초기 관절 각도. |
+| `kinematics.yaml` | MoveIt2 `move_group`이 사용하는 kinematics solver 종류 및 파라미터 (기본: KDL). |
+| `ur5e_robotiq_2f85_controllers.yaml` | `joint_trajectory_controller`, `joint_state_broadcaster`, `robotiq_gripper_controller` 설정. ros2_control이 이 파일을 읽어 컨트롤러를 로드. |
+| `ur5e/joint_limits.yaml` | UR5e 관절별 속도/가속도 제한값. MoveIt2 계획 시 참조. |
+| `ur5e/default_kinematics.yaml` | UR5e DH 파라미터 기반 기본 기구학 파라미터. |
 
-2. **ur_picking_node** (Action Server + MoveIt2)
-   - 커스텀 Action `MoveToPose` (`ur_picking/action/MoveToPose.action`) 서버
-     - Goal: `geometry_msgs/PoseStamped target_pose`
-     - Feedback: `string state` (예: `"PLANNING"`, `"EXECUTING"`)
-     - Result: `moveit_msgs/MoveItErrorCodes error_code`
-   - MoveIt2 `move_group_interface`를 사용하여:
-     - OMPL 플래너(RRT / RRT\* / RRTConnect)
-     - 또는 Cartesian 경로(`computeCartesianPath`)
-     로 궤적 생성
-   - `/stop` 토픽을 구독하여 **현재 실행 중인 궤적을 즉시 정지(원샷 Stop)** 제공
+### Launch
+
+| 파일 | 설명 |
+|---|---|
+| `ur_sim_moveit_robotiq.launch.py` | UR5e 전용 통합 런치. Gazebo, robot_state_publisher, ros2_control, MoveIt2(move_group), RViz를 한 번에 실행. |
+| `ur_sim_moveit_robotiq_ur16e.launch.py` | UR16e 전용 통합 런치. 기본 월드로 testbed.sdf 사용. UR16e 설정은 `ur_description` 패키지 경로를 직접 참조. |
 
 ---
 
-## 토픽 및 Action
-
-### 토픽
-
-- **`/move_goal`** (`geometry_msgs/msg/PoseStamped`)
-  - 외부에서 목표 Pose(물체 좌표 포함)를 전송하는 토픽
-  - `goal_receive_node`가 구독 → `MoveToPose` Action Goal로 변환
-
-- **`/stop`** (`std_msgs/msg/Bool`)
-  - 실행 중단 신호
-  - `true` 전송 시:
-    - 현재 실행 중인 MoveIt 궤적을 `move_group_.stop()` 으로 즉시 정지
-    - 해당 Action Goal은 ABORT 처리 (원샷)
-  - `false` 를 다시 보낼 필요 없이, 이후 새로운 `/move_goal`을 보내면 바로 다시 이동 가능
-
-- **`/current_state`** (`std_msgs/msg/String`)
-  - Action 서버 상태 및 결과를 문자열로 퍼블리시  
-  - 예: `"PLANNING"`, `"EXECUTING"`, `"SUCCEEDED"`, `"FAILED"`, `"ABORTED"`, `"REJECTED"` 등
-
-### Action
-
-- **`MoveToPose`** (`ur_picking/action/MoveToPose.action`)
-  - Goal:
-    - `geometry_msgs/PoseStamped target_pose`
-  - Result:
-    - `moveit_msgs/MoveItErrorCodes error_code`
-  - Feedback:
-    - `string state`
-
----
-
-## 종속성
-
-- ROS 2 Humble
-- MoveIt2 (moveit_core, moveit_ros_planning_interface, moveit_ros_move_group 등)
-- UR Robot Driver (ur_robot_driver, ur_moveit_config)
-- Ignition Gazebo / ros_gz_sim / ros_gz_bridge
-- ros2_robotiq_gripper (robotiq_description, robotiq_controllers, robotiq_driver)
-- geometry_msgs, std_msgs, moveit_msgs, action_msgs 등
-
----
-
-## 빌드 방법
-
-1. 워크스페이스 이동
+## 빌드
 
 ```bash
-cd /home/mkketi/dev_ws/Edge/Test_wall_ur
-```
-
-2. ROS 2 환경 설정
-
-```bash
-source /opt/ros/humble/setup.bash
-```
-
-3. 콜콘 빌드
-
-```bash
-colcon build --packages-select ur_picking ros2_robotiq_gripper --cmake-args -DCMAKE_BUILD_TYPE=Release
-```
-
-4. 워크스페이스 소스
-
-```bash
+cd <your_ws>
+source /opt/ros/${ROS_DISTRO}/setup.bash
+colcon build --packages-select ur_setup_bringup --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```
 
----
-
-## 실행 방법 (UR5e + Robotiq 2F-85 + MoveIt + Picking)
-
-### 1. Gazebo + UR5e + Robotiq + MoveIt 실행
+의존 패키지를 포함하여 함께 빌드하는 경우:
 
 ```bash
-ros2 launch ur_picking ur_sim_moveit_robotiq.launch.py ur_type:=ur5e safety_limits:=true
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
 
-- Ignition Gazebo GUI가 뜨고, UR5e + Robotiq 2F-85 모델이 스폰됩니다.
+---
+
+## 실행
+
+### UR5e + Robotiq 2F-85 시뮬레이션
+
+```bash
+ros2 launch ur_setup_bringup ur_sim_moveit_robotiq.launch.py ur_type:=ur5e safety_limits:=true
+```
+
+- Ignition Gazebo GUI, UR5e + Robotiq 2F-85 모델이 스폰됩니다.
 - `joint_state_broadcaster`, `joint_trajectory_controller`, `robotiq_gripper_controller`가 자동으로 활성화됩니다.
-- MoveIt `move_group` + RViz가 함께 실행됩니다.
+- MoveIt2 `move_group` 노드와 RViz가 함께 실행됩니다.
 
-### 2. Picking 노드 실행 (플래너/Cartesian 선택)
-
-별도 터미널에서:
+### UR16e + Robotiq 2F-85 + 테스트베드 시뮬레이션
 
 ```bash
-source install/setup.bash
-
-# 조인트-공간 RRT 플래너
-ros2 launch ur_picking ur_picking.launch.py use_cartesian:=false planner_type:=RRT
-
-# 조인트-공간 RRT* 플래너 (경로 최적화, 더 느릴 수 있음)
-ros2 launch ur_picking ur_picking.launch.py use_cartesian:=false planner_type:=RRTstar
-
-# Cartesian 경로 (엔드이펙터 직선 경로)
-ros2 launch ur_picking ur_picking.launch.py use_cartesian:=true
+ros2 launch ur_setup_bringup ur_sim_moveit_robotiq_ur16e.launch.py
 ```
 
-### 2-1. 런타임 중 플래너 변경
-
-```bash
-# RRT 사용
-ros2 param set /ur_picking_node planner_type "RRT"
-
-# RRT* 사용 (두 표기 모두 허용)
-ros2 param set /ur_picking_node planner_type "RRTstar"
-ros2 param set /ur_picking_node planner_type "RRT*"
-```
-
-### 3. move_goal 전송 (기본 예제)
-
-```bash
-ros2 topic pub --once /move_goal geometry_msgs/msg/PoseStamped "{
-  header: {frame_id: 'base_link'},
-  pose: {
-    position: {x: 0.0, y: 0.35, z: 0.26},
-    orientation: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
-  }
-}"
-```
-
-엔드이펙터 자세를 바꾸고 싶으면 `orientation`을 적절히 변경하면 됩니다.
-
-### 4. 정지 (Stop)
-
-```bash
-ros2 topic pub /stop std_msgs/msg/Bool "data: true"
-```
-
-현재 실행 중인 궤적이 즉시 멈추고, 해당 Goal은 ABORT 처리됩니다.  
-이후 새로운 `/move_goal`을 바로 보낼 수 있습니다.
-
-### 5. 상태 확인
-
-```bash
-ros2 topic echo /current_state
-```
-
-`PLANNING`, `EXECUTING`, `SUCCEEDED`, `FAILED`, `ABORTED`, `REJECTED` 등의 상태를 확인할 수 있습니다.
+- 기본 월드: `worlds/testbed.sdf`
+- UR16e 기구학 설정은 `ur_description` 패키지의 `config/ur16e/` 경로를 직접 참조합니다.
 
 ---
 
-## 그리퍼 제어 요약
+## 주요 런치 인수
 
-- 시뮬 실행 시, `robotiq_gripper_controller` 가 자동으로 활성화됩니다.
-- GripperActionController 액션으로 직접 제어할 수 있습니다.
+아래 인수는 두 launch 파일 공통으로 사용할 수 있습니다.
+
+| 인수 | 기본값 | 설명 |
+|---|---|---|
+| `ur_type` | `ur5e` / `ur16e` | UR 로봇 모델 종류 |
+| `safety_limits` | `true` | UR 안전 제한 적용 여부 |
+| `safety_pos_margin` | `0.15` | 안전 위치 마진 [rad] |
+| `safety_k_position` | `20` | 안전 위치 게인 |
+| `prefix` | `""` | 관절/링크 이름 앞에 붙는 prefix (다중 로봇 구성 시 사용) |
+| `gazebo_gui` | `true` | Gazebo GUI 실행 여부 |
+| `world_file` | `empty.sdf` | Gazebo 월드 파일 경로 또는 파일명 |
+| `use_sim_time` | `true` | 시뮬레이션 시간 사용 여부 |
+| `launch_rviz` | `true` | RViz 실행 여부 |
+| `launch_servo` | `true` | MoveIt2 Servo 노드 실행 여부 |
+| `srdf_package` | `ur_setup_bringup` | SRDF 파일이 위치한 패키지 이름 |
+| `srdf_file` | `ur_robotiq.srdf.xacro` | 사용할 SRDF 파일명 |
+| `moveit_joint_limits_file` | `joint_limits.yaml` | MoveIt2 관절 제한 파일명 |
+
+---
+
+## 그리퍼 제어
+
+시뮬레이션 실행 후, `robotiq_gripper_controller`를 통해 GripperCommand 액션으로 그리퍼를 제어합니다.
 
 ```bash
-# 현재 컨트롤러 상태 확인
+# 컨트롤러 상태 확인
 ros2 control list_controllers
 
 # 그리퍼 열기
@@ -248,51 +227,21 @@ ros2 action send_goal \
   control_msgs/action/GripperCommand \
   "{command: {position: 0.0, max_effort: 40.0}}"
 
-# 그리퍼 닫기 (예: 0.7 근처)
+# 그리퍼 닫기
 ros2 action send_goal \
   /robotiq_gripper_controller/gripper_cmd \
   control_msgs/action/GripperCommand \
   "{command: {position: 0.7, max_effort: 40.0}}"
 ```
 
-시뮬레이션에서는 **`robotiq_activation_controller` 는 사용하지 않습니다.**  
-이는 실제 하드웨어 활성화를 위한 GPIO 기반 컨트롤러이며,  
-Ignition Gazebo용 ros2_control 구성에서는 해당 GPIO 인터페이스가 생성되지 않기 때문입니다.
-
----
-
-## 동작 흐름 (최종)
-
-1. 외부 노드에서 `/move_goal` 토픽으로 목표 Pose 전송
-2. `goal_receive_node`가 Pose를 수신하고 `MoveToPose` Action Goal(`target_pose`)로 변환
-3. `ur_picking_node`가 Goal 수신:
-   - `planner_type` / `use_cartesian` 설정에 따라
-     - OMPL 플래너(RRT / RRT\* / RRTConnect) 또는
-     - Cartesian 경로
-     로 계획
-4. 계획된 `RobotTrajectory`를 MoveIt2 `move_group`으로 실행
-5. 실행 중 `/stop` 토픽으로 `true` 전송 시:
-   - 현재 궤적 정지 + 해당 Goal ABORT (원샷)
-6. 이후 새로운 `/move_goal` 수신 시 다시 2번부터 반복
-
----
-
-## 설정
-
-`config/picking_params.yaml` (선택 사용) 파일에서 다음을 설정할 수 있습니다:
-
-- Planning 파라미터 (planning_time, num_planning_attempts 등)
-- 홈 포지션 (joint values)
-- Pick/Place 포지션 (position, orientation)
+> 시뮬레이션에서는 `robotiq_activation_controller`를 사용하지 않습니다.
+> 이 컨트롤러는 실제 하드웨어의 GPIO 기반 활성화 전용이며, Ignition Gazebo의 ros2_control 구성에서는 해당 GPIO 인터페이스가 제공되지 않습니다.
 
 ---
 
 ## 주의사항
 
-- MoveIt2와 UR 로봇 드라이버/시뮬레이터가 **정상적으로 실행 중**이어야 합니다.
-- Planning group 이름은 기본적으로 `"ur_manipulator"` 입니다.
-- `use_cartesian:=true` 인 경우, 시작 Pose와 목표 Pose 사이에 충돌/IK 실패 등이 있으면 Cartesian 경로 계획이 실패할 수 있습니다.
-- Action 기반 제어이므로, `goal_receive_node`와 `ur_picking_node`가 모두 실행되어야 정상 동작합니다.
-
-
->>>>>>> 54893f4 (ur5e에 그리퍼 부착 완료, 기능: stop, move_goal, 그리핑)
+- `ur_simulation_gz` 패키지가 없으면 Gazebo 런치가 실패합니다. 사전 설치를 확인하십시오.
+- UR16e 런치는 `ur5e/` 설정 디렉토리를 사용하지 않고 `ur_description` 패키지의 `config/ur16e/`를 직접 참조합니다. 별도 복사가 필요하지 않습니다.
+- MoveIt2 Planning Group 이름은 `ur_manipulator`(팔), `gripper`(그리퍼)로 고정되어 있습니다. 변경이 필요하면 `srdf/ur_robotiq.srdf.xacro`를 수정하십시오.
+- 이 패키지는 설정 및 스폰 전용입니다. pick and place 등 태스크 노드는 별도 패키지에서 구현하고 이 패키지의 launch를 include하거나 의존성으로 추가하여 사용하십시오.
