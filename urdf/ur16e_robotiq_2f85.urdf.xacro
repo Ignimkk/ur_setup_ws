@@ -28,6 +28,10 @@
        UR 로봇 매크로 및 주변 장치 포함
        ================================================================ -->
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <!-- 카메라 브라켓 어댑터 (tool0 -> camera_mounting_point + gripper_mounting_point) -->
+  <xacro:include filename="$(find ur_setup_bringup)/urdf/camera_bracket_adapter.urdf.xacro"/>
+  <!-- RealSense D435 (D435i의 IMU 모듈은 Ignition Fortress와 호환 불가) -->
+  <xacro:include filename="$(find realsense2_description)/urdf/_d435.urdf.xacro"/>
   <xacro:include filename="$(find ur_setup_bringup)/urdf/ur_to_robotiq_adapter.urdf.xacro"/>
   <xacro:include filename="$(find robotiq_description)/urdf/robotiq_2f_85_macro.urdf.xacro"/>
 
@@ -167,11 +171,61 @@
   </xacro:ur_robot>
 
   <!-- ================================================================
-       Robotiq 2F-85 어댑터 + 그리퍼 (tool0 기준)
+       카메라 브라켓 + RealSense D435 (tool0 기준)
+       ================================================================ -->
+  <xacro:camera_bracket_adapter
+    prefix="$(arg tf_prefix)"
+    parent="$(arg tf_prefix)tool0"/>
+
+  <xacro:sensor_d435
+    parent="$(arg tf_prefix)camera_mounting_point"
+    name="$(arg tf_prefix)camera"
+    use_nominal_extrinsics="true">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:sensor_d435>
+
+  <!--
+    Ignition Gazebo RGBD 카메라 센서 플러그인.
+    - type="rgbd_camera": 컬러 이미지 + 뎁스 이미지 + 포인트 클라우드를 동시에 발행
+    - reference: sensor_d435 매크로가 생성하는 camera_link 프레임을 참조
+    - topic: Ignition 내부 토픽 prefix (ros_gz_bridge에서 ROS2 토픽으로 변환)
+    - ignition_frame_id: 발행되는 이미지 메시지의 frame_id (Fortress 전용 태그, gz_frame_id는 Garden+에서만 유효)
+    - sensors 시스템 플러그인은 world SDF(testbed.sdf)에서 로드됨
+  -->
+  <gazebo reference="$(arg tf_prefix)camera_link">
+    <sensor name="$(arg tf_prefix)d435_rgbd" type="rgbd_camera">
+      <camera>
+        <!-- D435 수평 시야각: 약 86도 = 1.5009 rad -->
+        <horizontal_fov>1.5009</horizontal_fov>
+        <image>
+          <width>848</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.105</near>
+          <far>10.0</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.007</stddev>
+        </noise>
+      </camera>
+      <always_on>1</always_on>
+      <update_rate>30</update_rate>
+      <visualize>true</visualize>
+      <topic>$(arg tf_prefix)camera</topic>
+      <ignition_frame_id>$(arg tf_prefix)camera_color_optical_frame</ignition_frame_id>
+    </sensor>
+  </gazebo>
+
+  <!-- ================================================================
+       Robotiq 2F-85 어댑터 + 그리퍼 (브라켓의 gripper_mounting_point 기준)
        ================================================================ -->
   <xacro:ur_to_robotiq
     prefix="$(arg tf_prefix)"
-    parent="$(arg tf_prefix)tool0"
+    parent="$(arg tf_prefix)gripper_mounting_point"
     child="$(arg tf_prefix)robotiq_85_base_link"/>
 
   <xacro:robotiq_gripper

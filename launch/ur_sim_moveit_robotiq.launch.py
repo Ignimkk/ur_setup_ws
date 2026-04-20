@@ -1,5 +1,6 @@
 import os
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -138,26 +139,29 @@ def launch_setup(context, *args, **kwargs):
         parameters=[{"use_sim_time": True}, robot_description],
     )
 
-    # Gazebo / ros_gz_sim
-    # Gazebo의 model://robotiq_description/... URI를 해석하려면
-    # 상위 디렉터리(share)가 리소스 경로에 포함되어야 함.
-    robotiq_share_parent = PathJoinSubstitution(
-        [FindPackageShare("robotiq_description"), ".."]
+    # Gazebo 리소스 경로 설정.
+    # Ignition은 model://패키지명/... URI를 해석할 때 IGN_GAZEBO_RESOURCE_PATH에서
+    # "패키지명" 디렉토리를 탐색함. 따라서 share/ 디렉토리(패키지 디렉토리의 부모)를 등록해야 함.
+    # PathJoinSubstitution([..., ".."]) 은 경로에 리터럴 ".."가 남아 Ignition이 해석 불가하므로
+    # OpaqueFunction 컨텍스트에서 os.path.dirname + get_package_share_directory 로 실제 경로를 얻음.
+    robotiq_share_parent = os.path.dirname(
+        get_package_share_directory("robotiq_description")
     )
-    ur_setup_bringup_share_parent = PathJoinSubstitution(
-        [FindPackageShare("ur_setup_bringup"), ".."]
+    ur_setup_bringup_share_parent = os.path.dirname(
+        get_package_share_directory("ur_setup_bringup")
     )
-    realsense_share_parent = PathJoinSubstitution(
-        [FindPackageShare("realsense2_description"), ".."]
+    realsense_share_parent = os.path.dirname(
+        get_package_share_directory("realsense2_description")
     )
+    resource_paths = ":".join([
+        robotiq_share_parent,
+        ur_setup_bringup_share_parent,
+        realsense_share_parent,
+    ])
     set_ign_resource_path = SetEnvironmentVariable(
         name="IGN_GAZEBO_RESOURCE_PATH",
         value=[
-            robotiq_share_parent,
-            ":",
-            ur_setup_bringup_share_parent,
-            ":",
-            realsense_share_parent,
+            resource_paths,
             ":",
             EnvironmentVariable("IGN_GAZEBO_RESOURCE_PATH", default_value=""),
         ],
@@ -165,11 +169,7 @@ def launch_setup(context, *args, **kwargs):
     set_gz_resource_path = SetEnvironmentVariable(
         name="GZ_SIM_RESOURCE_PATH",
         value=[
-            robotiq_share_parent,
-            ":",
-            ur_setup_bringup_share_parent,
-            ":",
-            realsense_share_parent,
+            resource_paths,
             ":",
             EnvironmentVariable("GZ_SIM_RESOURCE_PATH", default_value=""),
         ],
@@ -210,12 +210,28 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
-    # /clock 브리지
+    # /clock + 카메라 토픽 브리지
+    # Ignition 내부 토픽을 ROS2 토픽으로 변환.
+    # 브리지 형식: <ignition_topic>@<ros2_msg_type>[<ignition_msg_type>
+    #   [ : Ignition → ROS2 단방향
+    #   ] : ROS2 → Ignition 단방향
+    #   @ : 양방향
+    # prefix 기본값이 '""'(쌍따옴표 포함 문자열)이므로 strip('"')으로 제거해야 실제 빈 문자열을 얻음.
+    # 예: '""'.strip('"') = ''  /  'robot01_'.strip('"') = 'robot01_'
+    camera_prefix = prefix.perform(context).strip('"')
     gz_sim_bridge = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
         arguments=[
             "/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock",
+            # 컬러 이미지
+            f"/{camera_prefix}camera/image@sensor_msgs/msg/Image[ignition.msgs.Image",
+            # 뎁스 이미지
+            f"/{camera_prefix}camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image",
+            # 카메라 정보 (rgbd_camera는 camera_info를 단 1개만 발행함)
+            f"/{camera_prefix}camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
+            # 포인트 클라우드
+            f"/{camera_prefix}camera/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked",
         ],
         output="screen",
     )
@@ -486,8 +502,10 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "world_file",
-            default_value="empty.sdf",
-            description="Gazebo world file (absolute path or filename in Gazebo collection).",
+            default_value=PathJoinSubstitution(
+                [FindPackageShare("ur_setup_bringup"), "worlds", "simulation.sdf"]
+            ),
+            description="Gazebo world file. 기본값은 sensors 플러그인이 포함된 simulation.sdf.",
         )
     )
 

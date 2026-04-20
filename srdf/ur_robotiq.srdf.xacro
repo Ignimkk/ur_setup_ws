@@ -178,10 +178,7 @@
   <disable_collisions link1="$(arg prefix)camera_infra1_optical_frame" link2="$(arg prefix)camera_infra1_frame" reason="Adjacent" />
   <disable_collisions link1="$(arg prefix)camera_infra2_frame" link2="$(arg prefix)camera_depth_frame" reason="Adjacent" />
   <disable_collisions link1="$(arg prefix)camera_infra2_optical_frame" link2="$(arg prefix)camera_infra2_frame" reason="Adjacent" />
-  <disable_collisions link1="$(arg prefix)camera_accel_frame" link2="$(arg prefix)camera_link" reason="Adjacent" />
-  <disable_collisions link1="$(arg prefix)camera_accel_optical_frame" link2="$(arg prefix)camera_accel_frame" reason="Adjacent" />
-  <disable_collisions link1="$(arg prefix)camera_gyro_frame" link2="$(arg prefix)camera_link" reason="Adjacent" />
-  <disable_collisions link1="$(arg prefix)camera_gyro_optical_frame" link2="$(arg prefix)camera_gyro_frame" reason="Adjacent" />
+  <!-- D435i 전용 IMU 링크 (camera_accel_*, camera_gyro_*) 는 D435에 존재하지 않으므로 제거 -->
 
 
     <!-- ================================================================
