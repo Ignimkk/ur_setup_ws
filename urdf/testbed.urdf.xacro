@@ -24,6 +24,8 @@
       plate_left_y    : 좌측 플레이트 중심 Y  [m, robot base 프레임 기준] (기본: 0.35)
       plate_right_x   : 우측 플레이트 중심 X  [m, robot base 프레임 기준] (기본: 0.45)
       plate_right_y   : 우측 플레이트 중심 Y  [m, robot base 프레임 기준] (기본: -0.35)
+      obstacle_*      : 선택적 고정 충돌 직육면체
+                        기본은 비활성화. command 기반 spawn/remove 사용 권장.
   -->
   <xacro:macro name="testbed"
     params="
@@ -39,7 +41,14 @@
       plate_left_x:=0.45
       plate_left_y:=0.35
       plate_right_x:=-0.45
-      plate_right_y:=0.35">
+      plate_right_y:=0.35
+      obstacle_enabled:=false
+      obstacle_x:=0.0
+      obstacle_y:=0.45
+      obstacle_size_x:=0.05
+      obstacle_size_y:=0.30
+      obstacle_size_z:=0.40
+      obstacle_mass:=3.0">
 
     <!-- ==============================================================
          페데스탈 (받침대)
@@ -196,6 +205,57 @@
       <mu2>0.8</mu2>
       <selfCollide>false</selfCollide>
     </gazebo>
+
+    <!-- ==============================================================
+         선택적 고정 충돌 직육면체
+         command 기반 Gazebo spawn/remove + PlanningScene add/remove 를
+         사용할 때는 obstacle_enabled=false 상태를 유지한다.
+         필요 시에만 true 로 켜며, 기본 위치는 로봇에서 x=10 m 떨어진 곳.
+         ============================================================== -->
+    <xacro:if value="${obstacle_enabled}">
+      <link name="testbed_obstacle_link">
+        <visual>
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+          <geometry>
+            <box size="${obstacle_size_x} ${obstacle_size_y} ${obstacle_size_z}"/>
+          </geometry>
+          <material name="obstacle_red">
+            <color rgba="0.80 0.10 0.08 1.0"/>
+          </material>
+        </visual>
+        <collision>
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+          <geometry>
+            <box size="${obstacle_size_x} ${obstacle_size_y} ${obstacle_size_z}"/>
+          </geometry>
+        </collision>
+        <inertial>
+          <mass value="${obstacle_mass}"/>
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+          <inertia
+            ixx="${(1.0/12.0) * obstacle_mass * (obstacle_size_y**2 + obstacle_size_z**2)}"
+            ixy="0" ixz="0"
+            iyy="${(1.0/12.0) * obstacle_mass * (obstacle_size_x**2 + obstacle_size_z**2)}"
+            iyz="0"
+            izz="${(1.0/12.0) * obstacle_mass * (obstacle_size_x**2 + obstacle_size_y**2)}"/>
+        </inertial>
+      </link>
+
+      <joint name="testbed_obstacle_joint" type="fixed">
+        <parent link="${parent}"/>
+        <child link="testbed_obstacle_link"/>
+        <origin
+          xyz="${obstacle_x} ${obstacle_y} ${pedestal_z + obstacle_size_z / 2.0}"
+          rpy="0 0 0"/>
+      </joint>
+
+      <gazebo reference="testbed_obstacle_link">
+        <material>Gazebo/Red</material>
+        <mu1>0.8</mu1>
+        <mu2>0.8</mu2>
+        <selfCollide>false</selfCollide>
+      </gazebo>
+    </xacro:if>
 
   </xacro:macro>
 </robot>

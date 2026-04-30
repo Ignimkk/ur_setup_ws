@@ -178,8 +178,6 @@
   <disable_collisions link1="$(arg prefix)camera_infra1_optical_frame" link2="$(arg prefix)camera_infra1_frame" reason="Adjacent" />
   <disable_collisions link1="$(arg prefix)camera_infra2_frame" link2="$(arg prefix)camera_depth_frame" reason="Adjacent" />
   <disable_collisions link1="$(arg prefix)camera_infra2_optical_frame" link2="$(arg prefix)camera_infra2_frame" reason="Adjacent" />
-  <!-- D435i 전용 IMU 링크 (camera_accel_*, camera_gyro_*) 는 D435에 존재하지 않으므로 제거 -->
-
 
     <!-- ================================================================
        테스트베드 환경 링크 충돌 설정
@@ -203,5 +201,3 @@
   <disable_collisions link1="$(arg prefix)shoulder_link" link2="pedestal_link" reason="Never" />
 
 </robot>
-
-

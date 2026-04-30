@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<sdf version="1.7">
+  <model name="testbed_obstacle">
+    <static>true</static>
+    <link name="link">
+      <visual name="visual">
+        <geometry>
+          <box>
+            <size>0.05 0.30 0.40</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.80 0.10 0.08 1.0</ambient>
+          <diffuse>0.80 0.10 0.08 1.0</diffuse>
+        </material>
+      </visual>
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>0.05 0.30 0.40</size>
+          </box>
+        </geometry>
+      </collision>
+    </link>
+  </model>
+</sdf>

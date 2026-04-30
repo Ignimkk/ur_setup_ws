@@ -1,0 +1,191 @@
+1. ur_set_up 클론
+git clone https://github.com/Ignimkk/ur_setup_ws.git
+
+2. UR 가제보 fortress 클론
+git clone https://github.com/UniversalRobots/Universal_Robots_ROS2_GZ_Simulation.git
+
+3. 로보티큐 그리퍼
+git clone https://github.com/PickNikRobotics/ros2_robotiq_gripper.git
+
+4. 리얼센스
+sudo로 설치해놧음
+
+pkill -9 -f "ros2|gz|gazebo|rviz2|gzserver|gzclient"
+
+--------- 실행 명령어 ---------
+1. 가제보, 무브잇, UR+robotiq+realsense 브링업
+ros2 launch ur_setup_bringup ur_sim_moveit_robotiq_ur16e.launch.py 
+
+2. pnp 실행 
+# trigger_mode=0: pick_goal만 받아도 실행
+ros2 launch pick_place_module pick_place.launch.py trigger_mode:=0
+# trigger_mode=1: pick+place 모두 받아야 실행
+ros2 launch pick_place_module pick_place.launch.py trigger_mode:=1
+# logger 비활성
+ros2 launch pick_place_module pick_place.launch.py enable_logger:=false
+
+2-1 pnp + trajectroy client
+ros2 run pick_place_module pick_place_node --ros-args   -p use_trajopt:=true   -p use_sim_time:=true   --params-file /opt/ros/humble/share/ur_moveit_config/config/kinematics.yaml
+
+
+
+3. ee의 xyz 좌표 확인하기 
+ros2 run pick_place_module ee_pose_publisher 
+
+4. 경로를 time-waypoints로 분할하기
+ros2 run pick_place_module rrt_path_recorder_node
+
+5. rviz2에 경로 및 궤적 시각화 rviz2에서 path - pland, actual display에 추가하기
+
+ros2 run pick_place_module ee_path_visualizer_node
+
+
+6. trajectory opitimization server
+mk@mk:~/dev_ws/robot_arm/UR/trajopt_ws$ ros2 run trajopt_validation trajopt_server_node
+
+
+7. 장애물 command spawn/remove
+# URDF의 testbed_obstacle_link는 기본 비활성화되어 있음.
+# 크기: 0.05 x 0.30 x 0.40 [m]
+# plate_left와 plate_right 사이: world 기준 x=0.0, y=0.35, z=1.0
+# 로봇에서 10 m 떨어진 위치: world 기준 x=10.0, y=0.35, z=1.0
+
+# Gazebo spawn: plate 사이
+ros2 run ros_gz_sim create \
+  -file $(ros2 pkg prefix ur_setup_bringup)/share/ur_setup_bringup/models/testbed_obstacle/model.sdf \
+  -name testbed_obstacle \
+  -x 0.0 -y 0.35 -z 1.0
+
+# Gazebo spawn: 로봇에서 10 m 떨어진 위치
+ros2 run ros_gz_sim create \
+  -file $(ros2 pkg prefix ur_setup_bringup)/share/ur_setup_bringup/models/testbed_obstacle/model.sdf \
+  -name testbed_obstacle \
+  -x 10.0 -y 0.35 -z 1.0
+
+# Gazebo remove
+ign service -s /world/testbed_world/remove \
+  --reqtype ignition.msgs.Entity \
+  --reptype ignition.msgs.Boolean \
+  --timeout 1000 \
+  --req 'name: "testbed_obstacle", type: MODEL'
+
+# MoveIt PlanningScene add: plate 사이
+ros2 topic pub --once /collision_object moveit_msgs/msg/CollisionObject "{header: {frame_id: 'world'}, id: 'testbed_obstacle', primitives: [{type: 1, dimensions: [0.05, 0.30, 0.40]}], primitive_poses: [{position: {x: 0.0, y: 0.35, z: 1.0}, orientation: {w: 1.0}}], operation: 0}"
+
+# MoveIt PlanningScene add: 로봇에서 10 m 떨어진 위치
+ros2 topic pub --once /collision_object moveit_msgs/msg/CollisionObject "{header: {frame_id: 'world'}, id: 'testbed_obstacle', primitives: [{type: 1, dimensions: [0.05, 0.30, 0.40]}], primitive_poses: [{position: {x: 10.0, y: 0.35, z: 1.0}, orientation: {w: 1.0}}], operation: 0}"
+
+# MoveIt PlanningScene remove
+ros2 topic pub --once /collision_object moveit_msgs/msg/CollisionObject "{header: {frame_id: 'world'}, id: 'testbed_obstacle', operation: 1}"
+
+
+========= 목표 전송 =========
+
+3. 목표 전송 trigger =0
+ros2 topic pub --once /pick_goal geometry_msgs/msg/PoseStamped   "{header: {frame_id: 'base_link'}, pose: {position: {x: 0.4, y: 0.0, z: 0.4}, orientation: {x: 0.0, y: 1.0, z: 0.0, w: 0.0}}}"
+
+
+3-1 목표 전송 trigger = 1
+# pick_goal
+ros2 topic pub --once /pick_goal geometry_msgs/msg/PoseStamped "{
+  header: {frame_id: 'base_link'},
+  pose: {
+    position: {x: 0.4, y: 0.0, z: 0.3},
+    orientation: {x: 0.0, y: 0.707, z: 0.0, w: 0.707}
+  }
+}"
+
+# place_goal
+ros2 topic pub --once /place_goal geometry_msgs/msg/PoseStamped "{
+  header: {frame_id: 'base_link'},
+  pose: {
+    position: {x: 0.4, y: 0.3, z: 0.3},
+    orientation: {x: 0.0, y: 0.707, z: 0.0, w: 0.707}
+  }
+}"
+-----------------------------------------------
+###
+1. home
+
+ros2 action send_goal /pick pick_place_module/action/Pick "{
+  pick_pose: {
+    position: {x: 0.4, y: 0.1, z: 0.3},
+    orientation: {x: 0.0, y: 0.707, z: 0.0, w: 0.707}
+  }
+}"
+
+#################
+2. pick
+
+ros2 action send_goal /pick pick_place_module/action/Pick "{
+  pick_pose: {
+    position: {x: 0.34038, y: 0.22048, z: 0.28932},
+    orientation: {x: 0.73323, y: 0.67998, z: -0.00042, w: 0.000020}
+  }
+}"
+ros2 action send_goal /pick pick_place_module/action/Pick "{
+  pick_pose: {
+    position: {x: -0.42779, y: 0.1973, z: 0.32814},
+    orientation: {x: 0.00007, y: 1.00, z: -0.0001, w: -0.00304}
+  }
+}"
+
+
+#############
+3. place
+ros2 action send_goal /plcae pick_place_module/action/Place "{
+  place_pose: {
+    position: {x: -0.43316, y: 0.46110, z: 0.35814},
+    orientation: {x: 0.00007, y: 1.00, z: -0.0001, w: -0.00304}
+  }
+}"
+
+
+pick
+ros2 topic pub --once /pick_goal  geometry_msgs/PoseStamped \
+  '{header: {frame_id: "base_link"}, pose: {position: {x: 0.34038, y: 0.22048, z: 0.28932}, orientation: {y: 1.0}}}'
+
+place
+ros2 topic pub --once /place_goal geometry_msgs/PoseStamped \
+  '{header: {frame_id: "base_link"}, pose: {position: {x: -0.43316, y: 0.4611, z: 0.35814}, orientation: {y: 1.0}}}'
+
+
+
+###
+
+1. rrt
+ros2 launch pick_place_module pick_place.launch.py   use_sim_time:=true   trigger_mode:=0   enable_logger:=true   experiment_mode:=rrt_only   experiment_csv_path:=/home/mk/dev_ws/robot_arm/UR/ur_setup_ws/src/pick_place_module/results/rrt_only_results.csv
+
+2. trj
+ros2 launch pick_place_module pick_place.launch.py   use_sim_time:=true   trigger_mode:=1   enable_logger:=true   experiment_mode:=trajopt_only   experiment_csv_path:=/home/mk/dev_ws/robot_arm/UR/ur_setup_ws/src/pick_place_module/results/trj_only_results.csv
+
+3. rrt + trj
+ros2 launch pick_place_module pick_place.launch.py   use_sim_time:=true   trigger_mode:=1   enable_logger:=true   experiment_mode:=rrt_trajopt   experiment_csv_path:=/home/mk/dev_ws/robot_arm/UR/ur_setup_ws/src/pick_place_module/results/rrt_traj_results.csv
+
+
+###
+--------- 빌드 ---------
+colcon build --packages-select robotiq_description robotiq_controllers ur_simulation_gz  ur_setup_bringup pick_place_module --cmake-args -DCMAKE_BUILD_TYPE=Release
+colcon build --packages-select pick_place_module   --cmake-args -DPython3_EXECUTABLE=/usr/bin/python3
+
+
+pkill -9 -f "ros2|gz|gazebo|rviz2|gzserver|gzclient"
+
+장애물추가
+ros2 run ros_gz_sim create \
+  -file $(ros2 pkg prefix ur_setup_bringup)/share/ur_setup_bringup/models/testbed_obstacle/model.sdf \
+  -name testbed_obstacle \
+  -x 0.0 -y 0.35 -z 1.0
+
+장애물 제거
+ign service -s /world/testbed_world/remove \
+  --reqtype ignition.msgs.Entity \
+  --reptype ignition.msgs.Boolean \
+  --timeout 1000 \
+  --req 'name: "testbed_obstacle", type: MODEL'
+
+장애물 추가 무브잇
+ros2 topic pub --once /collision_object moveit_msgs/msg/CollisionObject "{header: {frame_id: 'world'}, id: 'testbed_obstacle', primitives: [{type: 1, dimensions: [0.05, 0.30, 0.40]}], primitive_poses: [{position: {x: 0.0, y: 0.45, z: 1.0}, orientation: {w: 1.0}}], operation: [0]}"
+
+장애물 제거 무브잇
+ros2 topic pub --once /collision_object moveit_msgs/msg/CollisionObject "{header: {frame_id: 'world'}, id: 'testbed_obstacle', operation: [1]}"
