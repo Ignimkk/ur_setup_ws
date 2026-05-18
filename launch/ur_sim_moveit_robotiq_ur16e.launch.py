@@ -213,6 +213,50 @@ def launch_setup(context, *args, **kwargs):
     )
 
     # ------------------------------------------------------------------ #
+    # Gazebo 에 pick-and-place 대상 alphabet mesh 스폰
+    # 각 알파벳은 URDF 고정 링크가 아니라 별도 동적 SDF 모델이다.
+    # plate: center=(0.60, 0.25), size=0.6 x 0.6, top z=0.92.
+    # 9개 대상(A,B,D,E,E,G,I,N,R)을 3x3 격자로 배치한다.
+    # STL 단위는 mm이고 각 SDF에서 scale=0.001을 적용한다.
+    # ------------------------------------------------------------------ #
+    alphabet_specs = [
+        ("alphabet_A",  "alphabet_A", "0.42", "0.43", "0.92"),
+        ("alphabet_B",  "alphabet_B", "0.60", "0.43", "0.92"),
+        ("alphabet_D",  "alphabet_D", "0.78", "0.43", "0.92"),
+        ("alphabet_E1", "alphabet_E", "0.42", "0.25", "0.92"),
+        ("alphabet_E2", "alphabet_E", "0.60", "0.25", "0.92"),
+        ("alphabet_G",  "alphabet_G", "0.78", "0.25", "0.92"),
+        ("alphabet_I",  "alphabet_I", "0.42", "0.07", "0.92"),
+        ("alphabet_N",  "alphabet_N", "0.60", "0.07", "0.92"),
+        ("alphabet_R",  "alphabet_R", "0.78", "0.07", "0.92"),
+    ]
+    alphabet_spawners = [
+        Node(
+            package="ros_gz_sim",
+            executable="create",
+            output="screen",
+            arguments=[
+                "-file",
+                PathJoinSubstitution([
+                    FindPackageShare(description_package),
+                    "models",
+                    model_dir,
+                    "model.sdf",
+                ]),
+                "-name", name,
+                "-x", x,
+                "-y", y,
+                "-z", z,
+            ],
+        )
+        for name, model_dir, x, y, z in alphabet_specs
+    ]
+    alphabet_spawn_start = TimerAction(
+        period=3.0,
+        actions=alphabet_spawners,
+    )
+
+    # ------------------------------------------------------------------ #
     # /clock + 카메라 토픽 브리지 (Ignition → ROS 2)
     # 브리지 형식: <ignition_topic>@<ros2_msg_type>[<ignition_msg_type>
     #   [ : Ignition → ROS2 단방향
@@ -434,6 +478,7 @@ def launch_setup(context, *args, **kwargs):
         gz_sim_bridge,
         robot_state_publisher_node,
         gz_spawn_entity,
+        alphabet_spawn_start,
         joint_state_broadcaster_spawner,
         initial_joint_controller_spawner_started,
         initial_joint_controller_spawner_stopped,

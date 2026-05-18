@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<sdf version="1.8">
+  <model name="alphabet_I">
+    <static>false</static>
+    <link name="link">
+      <inertial>
+        <pose>0 0 0.015 0 0 0</pose>
+        <mass>0.02</mass>
+        <inertia>
+          <ixx>1.0e-5</ixx>
+          <iyy>1.0e-5</iyy>
+          <izz>1.0e-5</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry>
+          <mesh>
+            <uri>model://ur_setup_bringup/meshes/alphabet/TA-I.stl</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.2</mu>
+              <mu2>1.2</mu2>
+            </ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>1e6</kp>
+              <kd>1e2</kd>
+            </ode>
+          </contact>
+        </surface>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://ur_setup_bringup/meshes/alphabet/TA-I.stl</uri>
+            <scale>0.001 0.001 0.001</scale>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.50 0.50 0.50 1</ambient>
+          <diffuse>0.50 0.50 0.50 1</diffuse>
+          <specular>0.35 0.35 0.35 1</specular>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>
