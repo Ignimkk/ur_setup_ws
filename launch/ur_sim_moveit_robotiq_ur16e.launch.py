@@ -20,10 +20,12 @@ from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
     OpaqueFunction,
+    RegisterEventHandler,
     SetEnvironmentVariable,
     TimerAction,
 )
 from launch.conditions import IfCondition, UnlessCondition
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     Command,
@@ -62,6 +64,7 @@ def launch_setup(context, *args, **kwargs):
     # Gazebo 인수
     gazebo_gui = LaunchConfiguration("gazebo_gui")
     world_file = LaunchConfiguration("world_file")
+    spawn_alphabet = LaunchConfiguration("spawn_alphabet")
 
     # MoveIt 설정 패키지/파일
     moveit_config_package = LaunchConfiguration("moveit_config_package")
@@ -219,17 +222,23 @@ def launch_setup(context, *args, **kwargs):
     # 9개 대상(A,B,D,E,E,G,I,N,R)을 3x3 격자로 배치한다.
     # STL 단위는 mm이고 각 SDF에서 scale=0.001을 적용한다.
     # ------------------------------------------------------------------ #
-    alphabet_specs = [
-        ("alphabet_A",  "alphabet_A", "0.42", "0.43", "0.92"),
-        ("alphabet_B",  "alphabet_B", "0.60", "0.43", "0.92"),
-        ("alphabet_D",  "alphabet_D", "0.78", "0.43", "0.92"),
-        ("alphabet_E1", "alphabet_E", "0.42", "0.25", "0.92"),
-        ("alphabet_E2", "alphabet_E", "0.60", "0.25", "0.92"),
-        ("alphabet_G",  "alphabet_G", "0.78", "0.25", "0.92"),
-        ("alphabet_I",  "alphabet_I", "0.42", "0.07", "0.92"),
-        ("alphabet_N",  "alphabet_N", "0.60", "0.07", "0.92"),
-        ("alphabet_R",  "alphabet_R", "0.78", "0.07", "0.92"),
+    # EDGE BRAIN 순서: E1, D, G, E2, B, R, A, I, N
+    # 리스트 순서는 EDGE BRAIN sequence 와 동일하게 맞추어, alphabet_count 로
+    # 앞에서부터 자르면 자연스럽게 "테스트용 첫 N 글자" 가 된다.
+    alphabet_specs_all = [
+        ("alphabet_E1", "alphabet_E", "0.42", "0.25", "0.92"),  # EDGE BRAIN[0]
+        ("alphabet_D",  "alphabet_D", "0.78", "0.43", "0.92"),  # EDGE BRAIN[1]
+        ("alphabet_G",  "alphabet_G", "0.78", "0.25", "0.92"),  # EDGE BRAIN[2]
+        ("alphabet_E2", "alphabet_E", "0.60", "0.25", "0.92"),  # EDGE BRAIN[3]
+        ("alphabet_B",  "alphabet_B", "0.60", "0.43", "0.92"),  # EDGE BRAIN[4]
+        ("alphabet_R",  "alphabet_R", "0.78", "0.07", "0.92"),  # EDGE BRAIN[5]
+        ("alphabet_A",  "alphabet_A", "0.42", "0.43", "0.92"),  # EDGE BRAIN[6]
+        ("alphabet_I",  "alphabet_I", "0.42", "0.07", "0.92"),  # EDGE BRAIN[7]
+        ("alphabet_N",  "alphabet_N", "0.60", "0.07", "0.92"),  # EDGE BRAIN[8]
     ]
+    alphabet_count = int(LaunchConfiguration("alphabet_count").perform(context))
+    alphabet_count = max(0, min(alphabet_count, len(alphabet_specs_all)))
+    alphabet_specs = alphabet_specs_all[:alphabet_count]
     alphabet_spawners = [
         Node(
             package="ros_gz_sim",
@@ -251,9 +260,23 @@ def launch_setup(context, *args, **kwargs):
         )
         for name, model_dir, x, y, z in alphabet_specs
     ]
-    alphabet_spawn_start = TimerAction(
-        period=3.0,
-        actions=alphabet_spawners,
+    # 로봇 스폰(gz_spawn_entity) 프로세스가 종료된 후(=시뮬레이터에 로봇 엔티티가
+    # 등록되어 첫 frame 이 안정화된 시점) 3 초 뒤에 알파벳을 마지막으로 스폰한다.
+    #
+    # 배경: STL collision 메시 9개를 로봇과 동시에 등록하면 초기 contact 해석
+    #       비용으로 RTF 가 급락하여 controller / action 응답이 지연된다.
+    #       로봇이 먼저 안착한 뒤 알파벳을 추가하면 초기 부하 spike 를 회피한다.
+    alphabet_spawn_start = RegisterEventHandler(
+        OnProcessExit(
+            target_action=gz_spawn_entity,
+            on_exit=[
+                TimerAction(
+                    period=5.0,
+                    actions=alphabet_spawners,
+                    condition=IfCondition(spawn_alphabet),
+                ),
+            ],
+        )
     )
 
     # ------------------------------------------------------------------ #
@@ -478,12 +501,14 @@ def launch_setup(context, *args, **kwargs):
         gz_sim_bridge,
         robot_state_publisher_node,
         gz_spawn_entity,
-        alphabet_spawn_start,
         joint_state_broadcaster_spawner,
         initial_joint_controller_spawner_started,
         initial_joint_controller_spawner_stopped,
         robotiq_gripper_controller_spawner,
         moveit_start,
+        # 알파벳 스폰은 로봇 + 컨트롤러 + MoveIt 가 모두 시작된 뒤
+        # 마지막에 트리거되도록 리스트 끝에 배치.
+        alphabet_spawn_start,
     ]
 
 
@@ -535,6 +560,17 @@ def generate_launch_description():
             [FindPackageShare("ur_setup_bringup"), "worlds", "testbed.sdf"]
         ),
         description="Gazebo 월드 파일 (절대 경로 또는 Gazebo 컬렉션 파일명).",
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "spawn_alphabet", default_value="true",
+        description="시작 시 plate 위 alphabet pick 대상들을 Gazebo에 스폰할지 여부.",
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "alphabet_count", default_value="2",
+        description=(
+            "EDGE BRAIN 시퀀스의 앞에서부터 몇 개의 알파벳을 스폰할지 (0~9). "
+            "테스트 시에는 2~3 권장. 전체 데모는 9 로 설정."
+        ),
     ))
 
     # MoveIt / 시간 인수
