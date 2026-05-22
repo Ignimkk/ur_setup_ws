@@ -222,3 +222,17 @@ ros2 node list 2>&1 | grep -E "pick_place_node|move_group"
 
 ros2 launch ur_setup_bringup ur_sim_moveit_robotiq_ur16e.launch.py \
   gazebo_gui:=false alphabet_count:=2
+
+-----------------------
+
+
+최종 command
+ros2 launch ur_setup_bringup ur_sim_moveit_robotiq_ur16e.launch.py gazebo_gui:=true spawn_alphabet:=true alphabet_count:=9
+
+ros2 launch pick_place_module pick_place.launch.py   use_sim_time:=true   trigger_mode:=1   enable_logger:=true   experiment_mode:=rrt_only   experiment_csv_path:=/home/mk/dev_ws/robot_arm/UR/ur_setup_ws/src/pick_place_module/results/rrt_only_results.csv
+
+ros2 run pick_place_module edge_brain_dispatcher_node   --ros-args -p letter_count:=9
+
+
+# RTF 확인
+ign topic -e -t /stats

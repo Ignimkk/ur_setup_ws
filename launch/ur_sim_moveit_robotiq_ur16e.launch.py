@@ -18,6 +18,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    ExecuteProcess,
     IncludeLaunchDescription,
     OpaqueFunction,
     RegisterEventHandler,
@@ -266,12 +267,37 @@ def launch_setup(context, *args, **kwargs):
     # 배경: STL collision 메시 9개를 로봇과 동시에 등록하면 초기 contact 해석
     #       비용으로 RTF 가 급락하여 controller / action 응답이 지연된다.
     #       로봇이 먼저 안착한 뒤 알파벳을 추가하면 초기 부하 spike 를 회피한다.
+    # DetachableJoint plugin 의 attachRequested 기본값이 true 라서
+    # alphabet 이 spawn 되는 순간 자동으로 wrist_3_link 에 attach 되어
+    # 9 개 letter 가 모두 robot 에 끌려가 떨어지는 문제가 있음.
+    # 대응: alphabet spawn 전에 detach 메시지를 미리 publish 하여 plugin 의
+    # detachRequested 를 true 로 만들어 둠. plugin source (PreUpdate) 가
+    # 한 tick 안에 attach→detach 분기를 순차 실행하므로, alphabet 이 발견되어
+    # attach 가 일어나는 같은 tick 에 즉시 detach 가 처리되어 letter 가
+    # 원위치에 그대로 머무름.
+    # ign cli 로 ignition.msgs.Empty 를 여러 번 발행 (subscriber timing 안전).
+    detach_pre_spam = ExecuteProcess(
+        cmd=[
+            "bash", "-c",
+            # 0.2s 간격으로 15 번 = 약 3 초 동안 detach 트리거 유지.
+            # 이 윈도우가 alphabet spawn (가변 timing) 을 충분히 덮음.
+            "for i in $(seq 1 15); do "
+            "ign topic -t /grasp/release_all "
+            "-m ignition.msgs.Empty -p '' >/dev/null 2>&1; "
+            "sleep 0.2; done"
+        ],
+        output="screen",
+    )
+
     alphabet_spawn_start = RegisterEventHandler(
         OnProcessExit(
             target_action=gz_spawn_entity,
             on_exit=[
+                # 1) 즉시 detach spam 시작 (백그라운드, ~3s 동안 발행)
+                detach_pre_spam,
+                # 2) 5s 뒤 alphabet spawn (detach spam 이 spawn 시점을 덮도록)
                 TimerAction(
-                    period=5.0,
+                    period=10.0,
                     actions=alphabet_spawners,
                     condition=IfCondition(spawn_alphabet),
                 ),
@@ -287,6 +313,26 @@ def launch_setup(context, *args, **kwargs):
     # prefix 기본값이 '""'(쌍따옴표 포함 문자열)이므로 strip('"')으로 제거해야 실제 빈 문자열을 얻음.
     # 예: '""'.strip('"') = ''  /  'robot01_'.strip('"') = 'robot01_'
     camera_prefix = prefix.perform(context).strip('"')
+
+    # DetachableJoint 플러그인은 ignition::transport 로 attach/detach 토픽을
+    # 구독하므로, dispatcher / pick_place_node 가 publish 하는 ROS 토픽을
+    # Ignition 으로 흘려보내려면 ros_gz_bridge 에 ROS→Ign 매핑(`]`)이 필요.
+    alphabet_names = [
+        "alphabet_E1", "alphabet_D",  "alphabet_G",
+        "alphabet_E2", "alphabet_B",  "alphabet_R",
+        "alphabet_A",  "alphabet_I",  "alphabet_N",
+    ]
+    attach_bridge_args = [
+        f"/grasp/attach/{n}@std_msgs/msg/Empty]ignition.msgs.Empty"
+        for n in alphabet_names
+    ]
+    # /grasp/release_all 은 공용 detach 트리거 (ROS → Ign).
+    # /grasp/state/<name> 은 plugin 의 상태 변화 알림 (Ign → ROS, 디버깅용).
+    state_bridge_args = [
+        f"/grasp/state/{n}@std_msgs/msg/String[ignition.msgs.StringMsg"
+        for n in alphabet_names
+    ]
+
     gz_sim_bridge = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
@@ -300,6 +346,12 @@ def launch_setup(context, *args, **kwargs):
             f"/{camera_prefix}camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
             # 포인트 클라우드
             f"/{camera_prefix}camera/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked",
+            # DetachableJoint attach 트리거 (ROS → Ign)
+            *attach_bridge_args,
+            # DetachableJoint 공용 detach 트리거 (ROS → Ign)
+            "/grasp/release_all@std_msgs/msg/Empty]ignition.msgs.Empty",
+            # DetachableJoint 상태 알림 (Ign → ROS, 디버깅)
+            *state_bridge_args,
         ],
         output="screen",
     )
