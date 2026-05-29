@@ -66,6 +66,10 @@ def launch_setup(context, *args, **kwargs):
     gazebo_gui = LaunchConfiguration("gazebo_gui")
     world_file = LaunchConfiguration("world_file")
     spawn_alphabet = LaunchConfiguration("spawn_alphabet")
+    # alphabet 의 DetachableJoint attach/detach 토픽 브리지 및
+    # 사전 detach 메시지 발행을 활성화할지 여부. false 로 두면
+    # 알파벳은 plate 위에 정적으로만 놓이고 로봇이 잡지 못함.
+    enable_attach_detach = LaunchConfiguration("enable_attach_detach")
 
     # MoveIt 설정 패키지/파일
     moveit_config_package = LaunchConfiguration("moveit_config_package")
@@ -287,6 +291,9 @@ def launch_setup(context, *args, **kwargs):
             "sleep 0.2; done"
         ],
         output="screen",
+        # enable_attach_detach=false 인 경우 detach 토픽 브리지 자체가 없으므로
+        # 사전 발행도 의미가 없음.
+        condition=IfCondition(enable_attach_detach),
     )
 
     alphabet_spawn_start = RegisterEventHandler(
@@ -333,6 +340,7 @@ def launch_setup(context, *args, **kwargs):
         for n in alphabet_names
     ]
 
+    # 기본 브리지: /clock + 카메라 토픽. 항상 활성화.
     gz_sim_bridge = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
@@ -346,6 +354,16 @@ def launch_setup(context, *args, **kwargs):
             f"/{camera_prefix}camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
             # 포인트 클라우드
             f"/{camera_prefix}camera/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked",
+        ],
+        output="screen",
+    )
+
+    # alphabet attach/detach 전용 브리지: enable_attach_detach=true 일 때만 실행.
+    # 단일 Node 의 arguments 는 부분 비활성화가 불가능하므로 별도 노드로 분리.
+    gz_attach_detach_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        arguments=[
             # DetachableJoint attach 트리거 (ROS → Ign)
             *attach_bridge_args,
             # DetachableJoint 공용 detach 트리거 (ROS → Ign)
@@ -354,6 +372,7 @@ def launch_setup(context, *args, **kwargs):
             *state_bridge_args,
         ],
         output="screen",
+        condition=IfCondition(enable_attach_detach),
     )
 
     # ------------------------------------------------------------------ #
@@ -551,6 +570,7 @@ def launch_setup(context, *args, **kwargs):
         gz_launch_with_gui,
         gz_launch_without_gui,
         gz_sim_bridge,
+        gz_attach_detach_bridge,
         robot_state_publisher_node,
         gz_spawn_entity,
         joint_state_broadcaster_spawner,
@@ -622,6 +642,16 @@ def generate_launch_description():
         description=(
             "EDGE BRAIN 시퀀스의 앞에서부터 몇 개의 알파벳을 스폰할지 (0~9). "
             "테스트 시에는 2~3 권장. 전체 데모는 9 로 설정."
+        ),
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "enable_attach_detach", default_value="true",
+        description=(
+            "알파벳 DetachableJoint attach/detach 기능 활성화 여부. "
+            "true: /grasp/attach/<name>, /grasp/release_all, /grasp/state/<name> "
+            "토픽 브리지와 사전 detach 메시지 발행이 모두 활성화됨. "
+            "false: 브리지 미생성 + 사전 detach 미발행. 알파벳은 plate 위에 "
+            "정적으로만 놓이고 pick/place 동작은 불가."
         ),
     ))
 

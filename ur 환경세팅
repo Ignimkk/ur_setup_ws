@@ -164,7 +164,7 @@ ros2 launch pick_place_module pick_place.launch.py   use_sim_time:=true   trigge
 ros2 launch pick_place_module pick_place.launch.py   use_sim_time:=true   trigger_mode:=1   enable_logger:=true   experiment_mode:=trajopt_only   experiment_csv_path:=/home/mk/dev_ws/robot_arm/UR/ur_setup_ws/src/pick_place_module/results/trj_only_results.csv
 
 3. rrt + trj
-ros2 launch pick_place_module pick_place.launch.py   use_sim_time:=true   trigger_mode:=1   enable_logger:=true   experiment_mode:=rrt_trajopt   experiment_csv_path:=/home/mk/dev_ws/robot_arm/UR/ur_setup_ws/src/pick_place_module/results/rrt_traj_results.csv
+ros2 launch pick_place_module pick_place.launch.py   use_sim_time:=true   trigger_mode:=1   enable_logger:=true   experiment_mode:=rrt_trajopt   experiment_csv_path:=/home/mk/dev_ws/robot_arm/UR/ur_setup_ws/src/pick_place_module/results/rrt_traj_results.csv use_trajopt:=true
 
 
 ###
@@ -187,6 +187,10 @@ ign service -s /world/testbed_world/remove \
   --reptype ignition.msgs.Boolean \
   --timeout 1000 \
   --req 'name: "testbed_obstacle", type: MODEL'
+
+
+ros2 topic pub --once /collision_object moveit_msgs/msg/CollisionObject "{header: {frame_id: 'world'}, id: 'testbed_obstacle', primitives: [{type: 1, dimensions: [0.05, 0.30, 0.25]}], primitive_poses: [{position: {x: 0.0, y: 0.55, z: 1.025}, orientation: {w: 1.0}}], operation: [0]}"
+
 
 장애물 추가 무브잇
 ros2 topic pub --once /collision_object moveit_msgs/msg/CollisionObject "{header: {frame_id: 'world'}, id: 'testbed_obstacle', primitives: [{type: 1, dimensions: [0.05, 0.30, 0.40]}], primitive_poses: [{position: {x: 0.0, y: 0.45, z: 1.0}, orientation: {w: 1.0}}], operation: [0]}"
@@ -227,12 +231,45 @@ ros2 launch ur_setup_bringup ur_sim_moveit_robotiq_ur16e.launch.py \
 
 
 최종 command
-ros2 launch ur_setup_bringup ur_sim_moveit_robotiq_ur16e.launch.py gazebo_gui:=true spawn_alphabet:=true alphabet_count:=9
+ros2 launch ur_setup_bringup ur_sim_moveit_robotiq_ur16e.launch.py gazebo_gui:=false spawn_alphabet:=false alphabet_count:=9
 
 ros2 launch pick_place_module pick_place.launch.py   use_sim_time:=true   trigger_mode:=1   enable_logger:=true   experiment_mode:=rrt_only   experiment_csv_path:=/home/mk/dev_ws/robot_arm/UR/ur_setup_ws/src/pick_place_module/results/rrt_only_results.csv
+ros2 launch pick_place_module pick_place.launch.py   use_sim_time:=true   trigger_mode:=1   enable_logger:=true   experiment_mode:=trajopt_only   experiment_csv_path:=/home/mk/dev_ws/robot_arm/UR/ur_setup_ws/src/pick_place_module/results/trj_only_results.csv
 
 ros2 run pick_place_module edge_brain_dispatcher_node   --ros-args -p letter_count:=9
 
 
 # RTF 확인
 ign topic -e -t /stats
+
+
+ros2 topic pub --once /collision_object moveit_msgs/msg/CollisionObject "{header: {frame_id: 'world'}, id: 'testbed_obstacle', primitives: [{type: 1, dimensions: [0.05, 0.30, 0.35]}], primitive_poses: [{position: {x: 0.0, y: 0.60, z: 1.0}, orientation: {w: 1.0}}], operation: [0]}"
+
+---
+experiment
+# 기존 결과를 다른 폴더로 백업 (선택)
+mv results results_backup_$(date +%Y%m%d)
+mkdir results
+
+python bench_01_initial_guess.py     # ~2분
+python bench_02_nonconvexity.py      # ~1분
+python bench_03_shortcut_ablation.py # ~1분
+python bench_04_baseline_compare.py  # ~1분
+python bench_06_cost_weights.py      # ~30초
+python bench_07_full_vs_reduced.py   # ~2분
+python bench_collision.py            # ~30분~1시간 (n_trials=30)
+Plot 생성
+
+python make_plots.py results/initial_guess_comparison.csv
+python make_plots.py results/collision_initial_guess.csv
+ls results/*_plots/  # PNG 확인
+분석 스크립트 (CSV → 통계 표)
+
+python /tmp/analyze_bench.py            # bench_01~06 종합
+python /tmp/analyze_bench07.py          # full vs reduced
+python /tmp/analyze_pre_place.py        # pre_place 정밀 검증
+python /tmp/analyze_bench_coll.py /tmp/b_coll.csv   # collision
+
+
+ros2 run trajopt_validation trajopt_server_node --ros-args   -p use_collision_penalty:=false   -p use_self_collision:=false   -p use_path_deviation:=true   -p mu_path:=10.0
+
