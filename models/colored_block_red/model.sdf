@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<sdf version="1.8">
+  <model name="colored_block_red">
+    <pose>0 0 0 0 0 0</pose>
+    <link name="link">
+      <inertial>
+        <mass>0.2</mass>
+        <inertia>
+          <ixx>1.333e-4</ixx>
+          <iyy>1.333e-4</iyy>
+          <izz>5.333e-5</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>0.04 0.04 0.08</size>
+          </box>
+        </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.2</mu>
+              <mu2>1.2</mu2>
+            </ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>1e6</kp>
+              <kd>1e2</kd>
+            </ode>
+          </contact>
+        </surface>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <box>
+            <size>0.04 0.04 0.08</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.95 0.10 0.08 1</ambient>
+          <diffuse>0.95 0.10 0.08 1</diffuse>
+          <specular>0.35 0.05 0.04 1</specular>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

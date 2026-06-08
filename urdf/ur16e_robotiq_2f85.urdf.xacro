@@ -103,6 +103,13 @@
        변경 시 testbed.urdf.xacro 의 params 블록만 수정하면 됨.
        ================================================================ -->
   <xacro:arg name="pedestal_z" default="0.9"/>
+  <xacro:arg name="enable_third_person_camera" default="false"/>
+  <xacro:arg name="openvla_camera_x" default="1.80"/>
+  <xacro:arg name="openvla_camera_y" default="-1.90"/>
+  <xacro:arg name="openvla_camera_z" default="2.90"/>
+  <xacro:arg name="openvla_camera_roll" default="0.0"/>
+  <xacro:arg name="openvla_camera_pitch" default="0.58"/>
+  <xacro:arg name="openvla_camera_yaw" default="2.25"/>
 
   <!-- xacro 표현식에서 사용하기 위해 property 로 변환 -->
   <xacro:property name="initial_positions_file" value="$(arg initial_positions_file)"/>
@@ -177,48 +184,99 @@
     prefix="$(arg tf_prefix)"
     parent="$(arg tf_prefix)tool0"/>
 
-  <xacro:sensor_d435
-    parent="$(arg tf_prefix)camera_mounting_point"
-    name="$(arg tf_prefix)camera"
-    use_nominal_extrinsics="true">
-    <origin xyz="0 0 0" rpy="0 0 0"/>
-  </xacro:sensor_d435>
-
   <!--
-    Ignition Gazebo RGBD 카메라 센서 플러그인.
-    - type="rgbd_camera": 컬러 이미지 + 뎁스 이미지 + 포인트 클라우드를 동시에 발행
-    - reference: sensor_d435 매크로가 생성하는 camera_link 프레임을 참조
-    - topic: Ignition 내부 토픽 prefix (ros_gz_bridge에서 ROS2 토픽으로 변환)
-    - ignition_frame_id: 발행되는 이미지 메시지의 frame_id (Fortress 전용 태그, gz_frame_id는 Garden+에서만 유효)
-    - sensors 시스템 플러그인은 world SDF(testbed.sdf)에서 로드됨
+    Wrist RealSense D435 disabled for OpenVLA third-person experiments.
+    To restore it later, change the xacro:if value below from "false" to "true".
+    Keep camera_bracket_adapter above enabled because it also provides the gripper mount.
   -->
-  <gazebo reference="$(arg tf_prefix)camera_link">
-    <sensor name="$(arg tf_prefix)d435_rgbd" type="rgbd_camera">
-      <camera>
-        <!-- D435 수평 시야각: 약 86도 = 1.5009 rad -->
-        <horizontal_fov>1.5009</horizontal_fov>
-        <image>
-          <width>848</width>
-          <height>480</height>
-          <format>R8G8B8</format>
-        </image>
-        <clip>
-          <near>0.105</near>
-          <far>10.0</far>
-        </clip>
-        <noise>
-          <type>gaussian</type>
-          <mean>0.0</mean>
-          <stddev>0.007</stddev>
-        </noise>
-      </camera>
-      <always_on>1</always_on>
-      <update_rate>1</update_rate>
-      <visualize>true</visualize>
-      <topic>$(arg tf_prefix)camera</topic>
-      <ignition_frame_id>$(arg tf_prefix)camera_color_optical_frame</ignition_frame_id>
-    </sensor>
-  </gazebo>
+  <xacro:if value="false">
+    <xacro:sensor_d435
+      parent="$(arg tf_prefix)camera_mounting_point"
+      name="$(arg tf_prefix)camera"
+      use_nominal_extrinsics="true">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </xacro:sensor_d435>
+
+    <!--
+      Ignition Gazebo RGBD 카메라 센서 플러그인.
+      - type="rgbd_camera": 컬러 이미지 + 뎁스 이미지 + 포인트 클라우드를 동시에 발행
+      - reference: sensor_d435 매크로가 생성하는 camera_link 프레임을 참조
+      - topic: Ignition 내부 토픽 prefix (ros_gz_bridge에서 ROS2 토픽으로 변환)
+      - ignition_frame_id: 발행되는 이미지 메시지의 frame_id (Fortress 전용 태그, gz_frame_id는 Garden+에서만 유효)
+      - sensors 시스템 플러그인은 world SDF(testbed.sdf)에서 로드됨
+    -->
+    <gazebo reference="$(arg tf_prefix)camera_link">
+      <sensor name="$(arg tf_prefix)d435_rgbd" type="rgbd_camera">
+        <camera>
+          <!-- D435 수평 시야각: 약 86도 = 1.5009 rad -->
+          <horizontal_fov>1.5009</horizontal_fov>
+          <image>
+            <width>848</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.105</near>
+            <far>10.0</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>1</update_rate>
+        <visualize>true</visualize>
+        <topic>$(arg tf_prefix)camera</topic>
+        <ignition_frame_id>$(arg tf_prefix)camera_color_optical_frame</ignition_frame_id>
+      </sensor>
+    </gazebo>
+  </xacro:if>
+
+  <!-- ================================================================
+       OpenVLA 입력용 third-person RealSense D435 RGBD camera
+       - world 에 fixed joint 로 연결되어 RViz RobotModel / TF 에서 위치 확인 가능
+       - D435 mesh 를 사용하되 rgbd_camera sensor 로 depth / point cloud 도 발행
+       ================================================================ -->
+  <xacro:if value="$(arg enable_third_person_camera)">
+    <xacro:sensor_d435
+      parent="world"
+      name="openvla_camera"
+      use_nominal_extrinsics="true">
+      <origin
+        xyz="$(arg openvla_camera_x) $(arg openvla_camera_y) $(arg openvla_camera_z)"
+        rpy="$(arg openvla_camera_roll) $(arg openvla_camera_pitch) $(arg openvla_camera_yaw)"/>
+    </xacro:sensor_d435>
+
+    <gazebo reference="openvla_camera_link">
+      <sensor name="openvla_camera_d435_rgbd" type="rgbd_camera">
+        <camera>
+          <!-- D435 수평 시야각: 약 86도 = 1.5009 rad -->
+          <horizontal_fov>1.5009</horizontal_fov>
+          <image>
+            <width>848</width>
+            <height>480</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.105</near>
+            <far>10.0</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.007</stddev>
+          </noise>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>10</update_rate>
+        <visualize>true</visualize>
+        <topic>openvla_camera</topic>
+        <ignition_frame_id>openvla_camera_color_optical_frame</ignition_frame_id>
+      </sensor>
+    </gazebo>
+  </xacro:if>
 
   <!-- ================================================================
        Robotiq 2F-85 어댑터 + 그리퍼 (브라켓의 gripper_mounting_point 기준)

@@ -66,6 +66,15 @@ def launch_setup(context, *args, **kwargs):
     gazebo_gui = LaunchConfiguration("gazebo_gui")
     world_file = LaunchConfiguration("world_file")
     spawn_alphabet = LaunchConfiguration("spawn_alphabet")
+    object_type = LaunchConfiguration("object_type")
+    enable_wrist_camera_image = LaunchConfiguration("enable_wrist_camera_image")
+    enable_third_person_camera = LaunchConfiguration("enable_third_person_camera")
+    openvla_camera_x = LaunchConfiguration("openvla_camera_x")
+    openvla_camera_y = LaunchConfiguration("openvla_camera_y")
+    openvla_camera_z = LaunchConfiguration("openvla_camera_z")
+    openvla_camera_roll = LaunchConfiguration("openvla_camera_roll")
+    openvla_camera_pitch = LaunchConfiguration("openvla_camera_pitch")
+    openvla_camera_yaw = LaunchConfiguration("openvla_camera_yaw")
     # alphabet 의 DetachableJoint attach/detach 토픽 브리지 및
     # 사전 detach 메시지 발행을 활성화할지 여부. false 로 두면
     # 알파벳은 plate 위에 정적으로만 놓이고 로봇이 잡지 못함.
@@ -129,6 +138,13 @@ def launch_setup(context, *args, **kwargs):
             " prefix:=",               prefix,
             " sim_ignition:=true",
             " simulation_controllers:=", controllers_file_path,
+            " enable_third_person_camera:=", enable_third_person_camera,
+            " openvla_camera_x:=", openvla_camera_x,
+            " openvla_camera_y:=", openvla_camera_y,
+            " openvla_camera_z:=", openvla_camera_z,
+            " openvla_camera_roll:=", openvla_camera_roll,
+            " openvla_camera_pitch:=", openvla_camera_pitch,
+            " openvla_camera_yaw:=", openvla_camera_yaw,
             # 테스트베드 치수는 xacro 파일(ur16e_robotiq_2f85.urdf.xacro,
             # testbed.urdf.xacro)의 xacro:arg / params 기본값을 그대로 사용.
             # 변경이 필요하면 해당 xacro 파일의 default 값을 수정할 것.
@@ -221,8 +237,10 @@ def launch_setup(context, *args, **kwargs):
     )
 
     # ------------------------------------------------------------------ #
-    # Gazebo 에 pick-and-place 대상 alphabet mesh 스폰
-    # 각 알파벳은 URDF 고정 링크가 아니라 별도 동적 SDF 모델이다.
+    # Gazebo 에 pick-and-place 대상 object 스폰
+    # object_type:=alphabet 인 경우 기존 alphabet mesh 를 그대로 사용한다.
+    # object_type:=colored_blocks 인 경우 OpenVLA 입력 실험용 색상 블록을 스폰한다.
+    # 각 대상은 URDF 고정 링크가 아니라 별도 동적 SDF 모델이다.
     # plate: center=(0.60, 0.25), size=0.6 x 0.6, top z=0.92.
     # 9개 대상(A,B,D,E,E,G,I,N,R)을 3x3 격자로 배치한다.
     # STL 단위는 mm이고 각 SDF에서 scale=0.001을 적용한다.
@@ -265,6 +283,50 @@ def launch_setup(context, *args, **kwargs):
         )
         for name, model_dir, x, y, z in alphabet_specs
     ]
+
+    colored_block_specs_all = [
+        ("block_red",    "colored_block_red",    "0.42", "0.37", "0.96"),
+        ("block_green",  "colored_block_green",  "0.56", "0.37", "0.96"),
+        ("block_blue",   "colored_block_blue",   "0.42", "0.13", "0.96"),
+        ("block_yellow", "colored_block_yellow", "0.56", "0.13", "0.96"),
+    ]
+    colored_block_count = int(LaunchConfiguration("colored_block_count").perform(context))
+    colored_block_count = max(0, min(colored_block_count, len(colored_block_specs_all)))
+    colored_block_specs = colored_block_specs_all[:colored_block_count]
+    colored_block_spawners = [
+        Node(
+            package="ros_gz_sim",
+            executable="create",
+            output="screen",
+            arguments=[
+                "-file",
+                PathJoinSubstitution([
+                    FindPackageShare(description_package),
+                    "models",
+                    model_dir,
+                    "model.sdf",
+                ]),
+                "-name", name,
+                "-x", x,
+                "-y", y,
+                "-z", z,
+            ],
+        )
+        for name, model_dir, x, y, z in colored_block_specs
+    ]
+
+    object_type_value = object_type.perform(context).strip().lower()
+    if object_type_value not in ("alphabet", "colored_blocks"):
+        raise RuntimeError(
+            "object_type must be either 'alphabet' or 'colored_blocks' "
+            f"(got: {object_type_value})"
+        )
+    object_spawners = (
+        alphabet_spawners
+        if object_type_value == "alphabet"
+        else colored_block_spawners
+    )
+
     # 로봇 스폰(gz_spawn_entity) 프로세스가 종료된 후(=시뮬레이터에 로봇 엔티티가
     # 등록되어 첫 frame 이 안정화된 시점) 3 초 뒤에 알파벳을 마지막으로 스폰한다.
     #
@@ -296,16 +358,16 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(enable_attach_detach),
     )
 
-    alphabet_spawn_start = RegisterEventHandler(
+    object_spawn_start = RegisterEventHandler(
         OnProcessExit(
             target_action=gz_spawn_entity,
             on_exit=[
                 # 1) 즉시 detach spam 시작 (백그라운드, ~3s 동안 발행)
-                detach_pre_spam,
-                # 2) 5s 뒤 alphabet spawn (detach spam 이 spawn 시점을 덮도록)
+                *([detach_pre_spam] if object_type_value == "alphabet" else []),
+                # 2) 10s 뒤 object spawn (detach spam 이 spawn 시점을 덮도록)
                 TimerAction(
                     period=10.0,
-                    actions=alphabet_spawners,
+                    actions=object_spawners,
                     condition=IfCondition(spawn_alphabet),
                 ),
             ],
@@ -340,14 +402,34 @@ def launch_setup(context, *args, **kwargs):
         for n in alphabet_names
     ]
 
-    # 기본 브리지: /clock + 카메라 토픽. 항상 활성화.
-    gz_sim_bridge = Node(
+    # 기본 브리지: /clock. 항상 활성화.
+    gz_clock_bridge = Node(
         package="ros_gz_bridge",
         executable="parameter_bridge",
         arguments=[
             "/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock",
-            # 컬러 이미지
+        ],
+        output="screen",
+    )
+
+    # Wrist camera ROS bridge 는 실험별로 끌 수 있도록 별도 노드로 분리한다.
+    # Gazebo wrist camera 모델/링크/센서는 URDF에 그대로 유지된다.
+    gz_wrist_camera_image_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        arguments=[
             f"/{camera_prefix}camera/image@sensor_msgs/msg/Image[ignition.msgs.Image",
+        ],
+        output="screen",
+        condition=IfCondition(enable_wrist_camera_image),
+    )
+
+    # enable_wrist_camera_image=false 일 때 OpenVLA 입력에 wrist camera 토픽이
+    # 섞이지 않도록 depth/camera_info/points 도 함께 끈다.
+    gz_wrist_camera_aux_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        arguments=[
             # 뎁스 이미지
             f"/{camera_prefix}camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image",
             # 카메라 정보 (rgbd_camera는 camera_info를 단 1개만 발행함)
@@ -356,23 +438,44 @@ def launch_setup(context, *args, **kwargs):
             f"/{camera_prefix}camera/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked",
         ],
         output="screen",
+        condition=IfCondition(enable_wrist_camera_image),
+    )
+
+    gz_openvla_camera_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        arguments=[
+            "/openvla_camera/image@sensor_msgs/msg/Image[ignition.msgs.Image",
+            "/openvla_camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image",
+            "/openvla_camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo",
+            "/openvla_camera/points@sensor_msgs/msg/PointCloud2[ignition.msgs.PointCloudPacked",
+        ],
+        remappings=[
+            ("/openvla_camera/image", "/openvla_camera/image_raw"),
+        ],
+        output="screen",
+        condition=IfCondition(enable_third_person_camera),
     )
 
     # alphabet attach/detach 전용 브리지: enable_attach_detach=true 일 때만 실행.
     # 단일 Node 의 arguments 는 부분 비활성화가 불가능하므로 별도 노드로 분리.
-    gz_attach_detach_bridge = Node(
-        package="ros_gz_bridge",
-        executable="parameter_bridge",
-        arguments=[
-            # DetachableJoint attach 트리거 (ROS → Ign)
-            *attach_bridge_args,
-            # DetachableJoint 공용 detach 트리거 (ROS → Ign)
-            "/grasp/release_all@std_msgs/msg/Empty]ignition.msgs.Empty",
-            # DetachableJoint 상태 알림 (Ign → ROS, 디버깅)
-            *state_bridge_args,
-        ],
-        output="screen",
-        condition=IfCondition(enable_attach_detach),
+    gz_attach_detach_bridge = (
+        Node(
+            package="ros_gz_bridge",
+            executable="parameter_bridge",
+            arguments=[
+                # DetachableJoint attach 트리거 (ROS → Ign)
+                *attach_bridge_args,
+                # DetachableJoint 공용 detach 트리거 (ROS → Ign)
+                "/grasp/release_all@std_msgs/msg/Empty]ignition.msgs.Empty",
+                # DetachableJoint 상태 알림 (Ign → ROS, 디버깅)
+                *state_bridge_args,
+            ],
+            output="screen",
+            condition=IfCondition(enable_attach_detach),
+        )
+        if object_type_value == "alphabet"
+        else None
     )
 
     # ------------------------------------------------------------------ #
@@ -569,18 +672,21 @@ def launch_setup(context, *args, **kwargs):
         set_gz_resource_path,
         gz_launch_with_gui,
         gz_launch_without_gui,
-        gz_sim_bridge,
-        gz_attach_detach_bridge,
+        gz_clock_bridge,
+        gz_wrist_camera_image_bridge,
+        gz_wrist_camera_aux_bridge,
+        gz_openvla_camera_bridge,
+        *([gz_attach_detach_bridge] if gz_attach_detach_bridge is not None else []),
         robot_state_publisher_node,
+        # object spawn handler 는 gz_spawn_entity 보다 먼저 등록되어야
+        # create 프로세스가 빠르게 종료되어도 OnProcessExit 이벤트를 놓치지 않는다.
+        object_spawn_start,
         gz_spawn_entity,
         joint_state_broadcaster_spawner,
         initial_joint_controller_spawner_started,
         initial_joint_controller_spawner_stopped,
         robotiq_gripper_controller_spawner,
         moveit_start,
-        # 알파벳 스폰은 로봇 + 컨트롤러 + MoveIt 가 모두 시작된 뒤
-        # 마지막에 트리거되도록 리스트 끝에 배치.
-        alphabet_spawn_start,
     ]
 
 
@@ -635,7 +741,15 @@ def generate_launch_description():
     ))
     declared_arguments.append(DeclareLaunchArgument(
         "spawn_alphabet", default_value="true",
-        description="시작 시 plate 위 alphabet pick 대상들을 Gazebo에 스폰할지 여부.",
+        description=(
+            "시작 시 plate 위 pick 대상들을 Gazebo에 스폰할지 여부. "
+            "기존 호환성을 위해 이름은 spawn_alphabet 으로 유지하며, "
+            "실제 대상은 object_type 으로 선택됨."
+        ),
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "object_type", default_value="alphabet",
+        description="스폰할 대상 종류: alphabet 또는 colored_blocks.",
     ))
     declared_arguments.append(DeclareLaunchArgument(
         "alphabet_count", default_value="2",
@@ -643,6 +757,50 @@ def generate_launch_description():
             "EDGE BRAIN 시퀀스의 앞에서부터 몇 개의 알파벳을 스폰할지 (0~9). "
             "테스트 시에는 2~3 권장. 전체 데모는 9 로 설정."
         ),
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "colored_block_count", default_value="4",
+        description="object_type:=colored_blocks 일 때 스폰할 색상 블록 개수 (0~4).",
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "enable_wrist_camera_image", default_value="true",
+        description=(
+            "기존 wrist-mounted camera ROS topic bridge 활성화 여부. "
+            "false 로 두면 /camera/image, /camera/depth_image, /camera/camera_info, "
+            "/camera/points ROS topic 을 bridge 하지 않으며, "
+            "wrist camera 모델/링크/센서는 Gazebo 안에 유지됨."
+        ),
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "enable_third_person_camera", default_value="false",
+        description=(
+            "OpenVLA 입력용 world-fixed D435 RGBD camera 및 "
+            "/openvla_camera/* bridge 활성화 여부."
+        ),
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "openvla_camera_x", default_value="1.80",
+        description="OpenVLA D435 camera world X position [m].",
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "openvla_camera_y", default_value="-1.90",
+        description="OpenVLA D435 camera world Y position [m].",
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "openvla_camera_z", default_value="2.90",
+        description="OpenVLA D435 camera world Z position [m].",
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "openvla_camera_roll", default_value="0.0",
+        description="OpenVLA D435 camera world roll [rad].",
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "openvla_camera_pitch", default_value="0.58",
+        description="OpenVLA D435 camera world pitch [rad].",
+    ))
+    declared_arguments.append(DeclareLaunchArgument(
+        "openvla_camera_yaw", default_value="2.25",
+        description="OpenVLA D435 camera world yaw [rad].",
     ))
     declared_arguments.append(DeclareLaunchArgument(
         "enable_attach_detach", default_value="true",
