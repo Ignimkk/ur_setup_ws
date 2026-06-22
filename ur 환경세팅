@@ -7,10 +7,23 @@ git clone https://github.com/UniversalRobots/Universal_Robots_ROS2_GZ_Simulation
 3. 로보티큐 그리퍼
 git clone https://github.com/PickNikRobotics/ros2_robotiq_gripper.git
 
-4. 리얼센스
+4. git clone https://github.com/RoverRobotics-forks/serial-ros2.git
+
+
+
+5. 리얼센스
 sudo로 설치해놧음
 
 pkill -9 -f "ros2|gz|gazebo|rviz2|gzserver|gzclient"
+
+
+
+----- 빌드
+
+로보티큐 및 시리얼
+colcon build   --packages-select serial robotiq_driver   --symlink-install   --cmake-args -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+
+
 
 --------- 실행 명령어 ---------
 1. 가제보, 무브잇, UR+robotiq+realsense 브링업
@@ -273,3 +286,6 @@ python /tmp/analyze_bench_coll.py /tmp/b_coll.csv   # collision
 
 ros2 run trajopt_validation trajopt_server_node --ros-args   -p use_collision_penalty:=false   -p use_self_collision:=false   -p use_path_deviation:=true   -p mu_path:=10.0
 
+
+
+----
