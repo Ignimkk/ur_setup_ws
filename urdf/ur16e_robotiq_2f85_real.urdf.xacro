@@ -1,0 +1,233 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="$(arg name)">
+  <!--
+    UR16e + Robotiq 2F-85 + 테스트베드(페데스탈/플레이트/팔레트) **실물 로봇** URDF.
+
+    sim 전용 URDF(ur16e_robotiq_2f85.urdf.xacro)와 동일한 macro 들을 사용하지만:
+      - sim_ignition / sim_gazebo = false  (실물용 ros2_control 인터페이스 생성)
+      - use_fake_hardware       = false  (UR 실물 + Robotiq RS-485 드라이버)
+      - Gazebo 플러그인(<gazebo> 태그), DetachableJoint, RGBD 카메라 sensor 블록 미포함
+      - pedestal / plate / pallet 의 위치를 xacro:arg 로 노출
+        (현장 조립 오프셋을 캘리브레이션 후 launch 인수로 주입)
+      - pedestal / plate / pallet 의 조인트는 UR controller / ros2_control joint
+        목록에 포함되지 않음 (fixed joint 이므로 자동 제외). 충돌 회피용으로만 존재.
+
+    UR joint 이름 / base / base_link / tool0 TF 구조는 ur_macro.xacro 가 정의한
+    것을 그대로 사용 (변경하지 않음).
+  -->
+
+  <!-- ================================================================
+       매크로 include
+       ================================================================ -->
+  <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:include filename="$(find ur_setup_bringup)/urdf/camera_bracket_adapter.urdf.xacro"/>
+  <xacro:include filename="$(find realsense2_description)/urdf/_d435.urdf.xacro"/>
+  <xacro:include filename="$(find ur_setup_bringup)/urdf/ur_to_robotiq_adapter.urdf.xacro"/>
+  <xacro:include filename="$(find robotiq_description)/urdf/robotiq_2f_85_macro.urdf.xacro"/>
+  <xacro:include filename="$(find ur_setup_bringup)/urdf/testbed.urdf.xacro"/>
+
+  <!-- ================================================================
+       UR 인수 — ur_robot_driver 가 ur_control.launch.py 에서 주입하는
+       값과 동일한 키를 갖춰 호환되도록 함.
+       ================================================================ -->
+  <xacro:arg name="name"    default="ur"/>
+  <xacro:arg name="ur_type" default="ur16e"/>
+
+  <xacro:arg name="tf_prefix"               default=""/>
+  <xacro:arg name="transmission_hw_interface" default=""/>
+  <xacro:arg name="safety_limits"           default="true"/>
+  <xacro:arg name="safety_pos_margin"       default="0.15"/>
+  <xacro:arg name="safety_k_position"       default="20"/>
+
+  <xacro:arg name="joint_limit_params"
+    default="$(find ur_description)/config/ur16e/joint_limits.yaml"/>
+  <xacro:arg name="kinematics_params"
+    default="$(find ur_description)/config/ur16e/default_kinematics.yaml"/>
+  <xacro:arg name="physical_params"
+    default="$(find ur_description)/config/ur16e/physical_parameters.yaml"/>
+  <xacro:arg name="visual_params"
+    default="$(find ur_description)/config/ur16e/visual_parameters.yaml"/>
+
+  <!-- 실물 driver 통신 인수 -->
+  <xacro:arg name="headless_mode"          default="false"/>
+  <xacro:arg name="robot_ip"               default="192.168.56.101"/>
+  <xacro:arg name="script_filename"
+    default="$(find ur_client_library)/resources/external_control.urscript"/>
+  <xacro:arg name="output_recipe_filename"
+    default="$(find ur_robot_driver)/resources/rtde_output_recipe.txt"/>
+  <xacro:arg name="input_recipe_filename"
+    default="$(find ur_robot_driver)/resources/rtde_input_recipe.txt"/>
+  <xacro:arg name="reverse_ip"             default="0.0.0.0"/>
+  <xacro:arg name="script_command_port"    default="50004"/>
+  <xacro:arg name="reverse_port"           default="50001"/>
+  <xacro:arg name="script_sender_port"     default="50002"/>
+  <xacro:arg name="trajectory_port"        default="50003"/>
+
+  <!-- 툴 통신(미사용 기본) -->
+  <xacro:arg name="use_tool_communication" default="false"/>
+  <xacro:arg name="tool_voltage"          default="0"/>
+  <xacro:arg name="tool_parity"           default="0"/>
+  <xacro:arg name="tool_baud_rate"        default="115200"/>
+  <xacro:arg name="tool_stop_bits"        default="1"/>
+  <xacro:arg name="tool_rx_idle_chars"    default="1.5"/>
+  <xacro:arg name="tool_tx_idle_chars"    default="3.5"/>
+  <xacro:arg name="tool_device_name"      default="/tmp/ttyUR"/>
+  <xacro:arg name="tool_tcp_port"         default="54321"/>
+
+  <!-- 실물 = fake / sim 비활성 -->
+  <xacro:arg name="use_fake_hardware"      default="false"/>
+  <xacro:arg name="fake_sensor_commands"   default="false"/>
+  <xacro:arg name="sim_gazebo"             default="false"/>
+  <xacro:arg name="sim_ignition"           default="false"/>
+  <xacro:arg name="simulation_controllers" default=""/>
+
+  <!-- 초기 자세 -->
+  <xacro:arg name="initial_positions_file"
+    default="$(find ur_setup_bringup)/config/initial_positions.yaml"/>
+
+  <!-- ================================================================
+       Robotiq 2F-85 (실물 RS-485 어댑터) 인수
+         com_port: USB-to-RS485 어댑터 경로. udev rule 권장.
+       ================================================================ -->
+  <xacro:arg name="gripper_com_port" default="/dev/ttyUSB0"/>
+
+  <!-- ================================================================
+       테스트베드 치수/오프셋 인수
+       현장 조립 후 캘리브레이션 값으로 override 가능.
+       모두 robot base_link 기준 좌표(단, pedestal_z 만 world→robot 마운트 높이).
+       ================================================================ -->
+  <xacro:arg name="pedestal_x"      default="2.0"/>
+  <xacro:arg name="pedestal_y"      default="0.8"/>
+  <xacro:arg name="pedestal_z"      default="0.9"/>
+  <xacro:arg name="pedestal_mass"   default="150.0"/>
+
+  <xacro:arg name="plate_size_x"    default="0.6"/>
+  <xacro:arg name="plate_size_y"    default="0.6"/>
+  <xacro:arg name="plate_thickness" default="0.02"/>
+  <xacro:arg name="plate_mass"      default="8.6"/>
+  <xacro:arg name="plate_x"         default="0.60"/>
+  <xacro:arg name="plate_y"         default="0.25"/>
+
+  <xacro:arg name="pallet_size_x"    default="0.6"/>
+  <xacro:arg name="pallet_size_y"    default="0.35"/>
+  <xacro:arg name="pallet_thickness" default="0.02"/>
+  <xacro:arg name="pallet_mass"      default="8.6"/>
+  <xacro:arg name="pallet_x"         default="-0.60"/>
+  <xacro:arg name="pallet_y"         default="0.35"/>
+
+  <!-- xacro 표현식에서 사용 -->
+  <xacro:property name="initial_positions_file" value="$(arg initial_positions_file)"/>
+  <xacro:property name="pedestal_z_val"          value="$(arg pedestal_z)"/>
+
+  <!-- ================================================================
+       WORLD
+       ================================================================ -->
+  <link name="world"/>
+
+  <!-- ================================================================
+       테스트베드 (페데스탈 + 좌측 plate + 우측 pallet)
+       fixed joint 이므로 ros2_control / UR controller joint 목록에는
+       포함되지 않으며, MoveIt collision 환경에만 등록됨.
+       ================================================================ -->
+  <xacro:testbed
+    parent="world"
+    pedestal_x="$(arg pedestal_x)"
+    pedestal_y="$(arg pedestal_y)"
+    pedestal_z="$(arg pedestal_z)"
+    pedestal_mass="$(arg pedestal_mass)"
+    plate_size_x="$(arg plate_size_x)"
+    plate_size_y="$(arg plate_size_y)"
+    plate_thickness="$(arg plate_thickness)"
+    plate_mass="$(arg plate_mass)"
+    plate_x="$(arg plate_x)"
+    plate_y="$(arg plate_y)"
+    pallet_size_x="$(arg pallet_size_x)"
+    pallet_size_y="$(arg pallet_size_y)"
+    pallet_thickness="$(arg pallet_thickness)"
+    pallet_mass="$(arg pallet_mass)"
+    pallet_x="$(arg pallet_x)"
+    pallet_y="$(arg pallet_y)"/>
+
+  <!-- ================================================================
+       UR16e 로봇 팔 (실물)
+         sim_ignition=false, sim_gazebo=false, use_fake_hardware=false
+         → ur_macro 가 ur_robot_driver/URPositionHardwareInterface 를
+           hardware plugin 으로 emit.
+       ================================================================ -->
+  <xacro:ur_robot
+    name="$(arg name)"
+    tf_prefix="$(arg tf_prefix)"
+    parent="world"
+    joint_limits_parameters_file="$(arg joint_limit_params)"
+    kinematics_parameters_file="$(arg kinematics_params)"
+    physical_parameters_file="$(arg physical_params)"
+    visual_parameters_file="$(arg visual_params)"
+    transmission_hw_interface="$(arg transmission_hw_interface)"
+    safety_limits="$(arg safety_limits)"
+    safety_pos_margin="$(arg safety_pos_margin)"
+    safety_k_position="$(arg safety_k_position)"
+    use_fake_hardware="$(arg use_fake_hardware)"
+    fake_sensor_commands="$(arg fake_sensor_commands)"
+    sim_gazebo="$(arg sim_gazebo)"
+    sim_ignition="$(arg sim_ignition)"
+    headless_mode="$(arg headless_mode)"
+    initial_positions="${xacro.load_yaml(initial_positions_file)}"
+    use_tool_communication="$(arg use_tool_communication)"
+    tool_voltage="$(arg tool_voltage)"
+    tool_parity="$(arg tool_parity)"
+    tool_baud_rate="$(arg tool_baud_rate)"
+    tool_stop_bits="$(arg tool_stop_bits)"
+    tool_rx_idle_chars="$(arg tool_rx_idle_chars)"
+    tool_tx_idle_chars="$(arg tool_tx_idle_chars)"
+    tool_device_name="$(arg tool_device_name)"
+    tool_tcp_port="$(arg tool_tcp_port)"
+    robot_ip="$(arg robot_ip)"
+    script_filename="$(arg script_filename)"
+    output_recipe_filename="$(arg output_recipe_filename)"
+    input_recipe_filename="$(arg input_recipe_filename)"
+    reverse_ip="$(arg reverse_ip)"
+    script_command_port="$(arg script_command_port)"
+    reverse_port="$(arg reverse_port)"
+    script_sender_port="$(arg script_sender_port)"
+    trajectory_port="$(arg trajectory_port)">
+    <origin xyz="0 0 ${pedestal_z_val}" rpy="0 0 0"/>
+  </xacro:ur_robot>
+
+  <!-- ================================================================
+       카메라 브라켓 + RealSense D435 (Gazebo sensor 블록 없음)
+       실물 RealSense ROS driver(realsense2_camera)는 별도 launch 로 띄움.
+       ================================================================ -->
+  <xacro:camera_bracket_adapter
+    prefix="$(arg tf_prefix)"
+    parent="$(arg tf_prefix)tool0"/>
+
+  <xacro:sensor_d435
+    parent="$(arg tf_prefix)camera_mounting_point"
+    name="$(arg tf_prefix)camera"
+    use_nominal_extrinsics="true">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:sensor_d435>
+
+  <!-- ================================================================
+       Robotiq 2F-85 어댑터 + 그리퍼 (실물)
+         sim_ignition=false, use_fake_hardware=false
+         → robotiq_driver/RobotiqGripperHardwareInterface plugin 활성화.
+         com_port: USB-RS485 어댑터 경로.
+       ================================================================ -->
+  <xacro:ur_to_robotiq
+    prefix="$(arg tf_prefix)"
+    parent="$(arg tf_prefix)gripper_mounting_point"
+    child="$(arg tf_prefix)robotiq_85_base_link"/>
+
+  <xacro:robotiq_gripper
+    name="robotiq_2f_85"
+    prefix="$(arg tf_prefix)"
+    parent="$(arg tf_prefix)ur_to_robotiq_link"
+    include_ros2_control="true"
+    sim_ignition="false"
+    use_fake_hardware="false"
+    com_port="$(arg gripper_com_port)">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:robotiq_gripper>
+
+</robot>

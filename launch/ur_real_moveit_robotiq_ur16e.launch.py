@@ -1,0 +1,515 @@
+"""
+ur_real_moveit_robotiq_ur16e.launch.py
+
+실물 UR16e + Robotiq 2F-85 (+ pedestal/plate/pallet 정적 충돌체) bring-up.
+
+대응 sim 런치: ur_sim_moveit_robotiq_ur16e.launch.py
+공통:
+  - URDF macro / SRDF / MoveIt 설정은 동일 구조 (ur_manipulator planning group,
+    base_link 기준 IK, robotiq_85_left_knuckle_joint 그리퍼 등)
+차이:
+  - Gazebo / gz_ros2_control 미사용
+  - use_sim_time = false
+  - 실물 UR controller_manager 는 ur_robot_driver/ur_ros2_control_node 가 spawn
+  - 실물 Robotiq 2F-85 는 같은 controller_manager 안의 robotiq_driver hardware
+    interface (URDF macro 가 robotiq_driver/RobotiqGripperHardwareInterface 를 emit)
+  - MoveIt 측 default controller 는 scaled_joint_trajectory_controller
+  - **자동 모션 방지**: scaled_joint_trajectory_controller 가
+    activate_joint_controller=false 일 때 spawner --inactive 로 로드만 됨.
+    플래닝(MoveIt) 후 실제 실행 직전 사용자가 명시적으로 controller 활성화 필요:
+      ros2 control switch_controllers \
+        --activate scaled_joint_trajectory_controller
+
+사용 예:
+  ros2 launch ur_setup_bringup ur_real_moveit_robotiq_ur16e.launch.py \
+    robot_ip:=192.168.56.101 \
+    gripper_com_port:=/dev/ttyUSB0
+
+  # 실행 권한 부여 (자동 활성화):
+  ros2 launch ur_setup_bringup ur_real_moveit_robotiq_ur16e.launch.py \
+    robot_ip:=192.168.56.101 activate_joint_controller:=true
+"""
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    OpaqueFunction,
+    RegisterEventHandler,
+    TimerAction,
+)
+from launch.conditions import IfCondition, UnlessCondition
+from launch.event_handlers import OnProcessExit
+from launch.substitutions import (
+    Command,
+    FindExecutable,
+    LaunchConfiguration,
+    PathJoinSubstitution,
+)
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterFile, ParameterValue
+from launch_ros.substitutions import FindPackageShare
+
+from ur_moveit_config.launch_common import load_yaml
+
+
+def launch_setup(context, *args, **kwargs):
+    # ---------------- UR / 안전 인수 ----------------
+    ur_type           = LaunchConfiguration("ur_type")
+    robot_ip          = LaunchConfiguration("robot_ip")
+    safety_limits     = LaunchConfiguration("safety_limits")
+    safety_pos_margin = LaunchConfiguration("safety_pos_margin")
+    safety_k_position = LaunchConfiguration("safety_k_position")
+    prefix            = LaunchConfiguration("prefix")
+    headless_mode     = LaunchConfiguration("headless_mode")
+
+    # ---------------- 그리퍼 인수 ----------------
+    gripper_com_port  = LaunchConfiguration("gripper_com_port")
+
+    # ---------------- 테스트베드 캘리브레이션 인수 ----------------
+    pedestal_x        = LaunchConfiguration("pedestal_x")
+    pedestal_y        = LaunchConfiguration("pedestal_y")
+    pedestal_z        = LaunchConfiguration("pedestal_z")
+    plate_x           = LaunchConfiguration("plate_x")
+    plate_y           = LaunchConfiguration("plate_y")
+    pallet_x          = LaunchConfiguration("pallet_x")
+    pallet_y          = LaunchConfiguration("pallet_y")
+
+    # ---------------- 컨트롤러 인수 ----------------
+    initial_joint_controller  = LaunchConfiguration("initial_joint_controller")
+    activate_joint_controller = LaunchConfiguration("activate_joint_controller")
+    launch_dashboard_client   = LaunchConfiguration("launch_dashboard_client")
+
+    # ---------------- MoveIt / RViz 인수 ----------------
+    launch_rviz                       = LaunchConfiguration("launch_rviz")
+    launch_servo                      = LaunchConfiguration("launch_servo")
+    moveit_joint_limits_file          = LaunchConfiguration("moveit_joint_limits_file")
+    warehouse_sqlite_path             = LaunchConfiguration("warehouse_sqlite_path")
+    publish_robot_description_semantic = LaunchConfiguration(
+        "publish_robot_description_semantic"
+    )
+    moveit_config_package = LaunchConfiguration("moveit_config_package")
+    srdf_package          = LaunchConfiguration("srdf_package")
+    srdf_file             = LaunchConfiguration("srdf_file")
+
+    # ---------------- 패키지 / 파일 ----------------
+    description_package   = "ur_setup_bringup"
+    description_file      = "ur16e_robotiq_2f85_real.urdf.xacro"
+    runtime_config_package = "ur_setup_bringup"
+    controllers_file      = "ur16e_robotiq_2f85_real_controllers.yaml"
+
+    controllers_file_path = PathJoinSubstitution(
+        [FindPackageShare(runtime_config_package), "config", controllers_file]
+    )
+
+    joint_limit_params = PathJoinSubstitution(
+        [FindPackageShare("ur_description"), "config", "ur16e", "joint_limits.yaml"]
+    )
+    kinematics_params = PathJoinSubstitution(
+        [FindPackageShare("ur_description"), "config", "ur16e", "default_kinematics.yaml"]
+    )
+    physical_params = PathJoinSubstitution(
+        [FindPackageShare("ur_description"), "config", "ur16e", "physical_parameters.yaml"]
+    )
+    visual_params = PathJoinSubstitution(
+        [FindPackageShare("ur_description"), "config", "ur16e", "visual_parameters.yaml"]
+    )
+    initial_positions_file = PathJoinSubstitution(
+        [FindPackageShare(description_package), "config", "initial_positions.yaml"]
+    )
+
+    # ur_robot_driver 가 사용하는 ur16e 실시간 주기(=500 Hz) 파일
+    update_rate_config_file = PathJoinSubstitution(
+        [FindPackageShare("ur_robot_driver"), "config", "ur16e_update_rate.yaml"]
+    )
+
+    # External Control URScript / RTDE recipe
+    script_filename = PathJoinSubstitution(
+        [FindPackageShare("ur_client_library"), "resources", "external_control.urscript"]
+    )
+    input_recipe_filename = PathJoinSubstitution(
+        [FindPackageShare("ur_robot_driver"), "resources", "rtde_input_recipe.txt"]
+    )
+    output_recipe_filename = PathJoinSubstitution(
+        [FindPackageShare("ur_robot_driver"), "resources", "rtde_output_recipe.txt"]
+    )
+
+    # ---------------- robot_description ----------------
+    robot_description_content = Command([
+        PathJoinSubstitution([FindExecutable(name="xacro")]),
+        " ",
+        PathJoinSubstitution(
+            [FindPackageShare(description_package), "urdf", description_file]
+        ),
+        " ur_type:=",               ur_type,
+        " joint_limit_params:=",    joint_limit_params,
+        " kinematics_params:=",     kinematics_params,
+        " physical_params:=",       physical_params,
+        " visual_params:=",         visual_params,
+        " initial_positions_file:=", initial_positions_file,
+        " safety_limits:=",         safety_limits,
+        " safety_pos_margin:=",     safety_pos_margin,
+        " safety_k_position:=",     safety_k_position,
+        " name:=ur",
+        " tf_prefix:=",             prefix,
+        " sim_gazebo:=false",
+        " sim_ignition:=false",
+        " use_fake_hardware:=false",
+        " headless_mode:=",         headless_mode,
+        " robot_ip:=",              robot_ip,
+        " script_filename:=",       script_filename,
+        " input_recipe_filename:=", input_recipe_filename,
+        " output_recipe_filename:=", output_recipe_filename,
+        " gripper_com_port:=",      gripper_com_port,
+        " pedestal_x:=",            pedestal_x,
+        " pedestal_y:=",            pedestal_y,
+        " pedestal_z:=",            pedestal_z,
+        " plate_x:=",               plate_x,
+        " plate_y:=",               plate_y,
+        " pallet_x:=",              pallet_x,
+        " pallet_y:=",              pallet_y,
+    ])
+    robot_description = {
+        "robot_description": ParameterValue(robot_description_content, value_type=str)
+    }
+
+    # ---------------- 실물 ros2_control 노드 ----------------
+    ur_control_node = Node(
+        package="ur_robot_driver",
+        executable="ur_ros2_control_node",
+        parameters=[
+            robot_description,
+            update_rate_config_file,
+            ParameterFile(controllers_file_path, allow_substs=True),
+        ],
+        output="screen",
+    )
+
+    # ---------------- robot_state_publisher ----------------
+    robot_state_publisher_node = Node(
+        package="robot_state_publisher",
+        executable="robot_state_publisher",
+        output="both",
+        parameters=[{"use_sim_time": False}, robot_description],
+    )
+
+    # ---------------- UR Dashboard / IO 보조 노드 ----------------
+    dashboard_client_node = Node(
+        package="ur_robot_driver",
+        executable="dashboard_client",
+        name="dashboard_client",
+        output="screen",
+        emulate_tty=True,
+        parameters=[{"robot_ip": robot_ip}],
+        condition=IfCondition(launch_dashboard_client),
+    )
+
+    urscript_interface = Node(
+        package="ur_robot_driver",
+        executable="urscript_interface",
+        parameters=[{"robot_ip": robot_ip}],
+        output="screen",
+    )
+
+    controller_stopper = Node(
+        package="ur_robot_driver",
+        executable="controller_stopper_node",
+        name="controller_stopper",
+        output="screen",
+        emulate_tty=True,
+        parameters=[
+            {"headless_mode": headless_mode},
+            {"joint_controller_active": activate_joint_controller},
+            {"consistent_controllers": [
+                "io_and_status_controller",
+                "force_torque_sensor_broadcaster",
+                "joint_state_broadcaster",
+                "speed_scaling_state_broadcaster",
+                "robotiq_gripper_controller",
+                "robotiq_activation_controller",
+            ]},
+        ],
+    )
+
+    # ---------------- controller spawner ----------------
+    def spawner(name, *extra_args, active=True):
+        args = [name, "--controller-manager", "/controller_manager"]
+        if not active:
+            args.append("--inactive")
+        args.extend(extra_args)
+        return Node(package="controller_manager", executable="spawner", arguments=args)
+
+    joint_state_broadcaster_spawner       = spawner("joint_state_broadcaster")
+    io_and_status_controller_spawner      = spawner("io_and_status_controller")
+    speed_scaling_state_broadcaster_spawner = spawner("speed_scaling_state_broadcaster")
+    force_torque_sensor_broadcaster_spawner = spawner("force_torque_sensor_broadcaster")
+
+    # UR trajectory controller — activate_joint_controller=true 면 active,
+    # false 면 inactive 로 로드 (자동 모션 방지).
+    initial_joint_controller_spawner_active = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[initial_joint_controller, "-c", "/controller_manager"],
+        condition=IfCondition(activate_joint_controller),
+    )
+    initial_joint_controller_spawner_inactive = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=[initial_joint_controller, "-c", "/controller_manager", "--inactive"],
+        condition=UnlessCondition(activate_joint_controller),
+    )
+
+    # Robotiq controller 들은 같은 controller_manager 안에 함께 로드.
+    robotiq_gripper_controller_spawner    = spawner("robotiq_gripper_controller")
+    robotiq_activation_controller_spawner = spawner("robotiq_activation_controller")
+
+    # ---------------- MoveIt ----------------
+    # SRDF (sim 과 동일 파일 — 링크/조인트 토폴로지가 같음)
+    robot_description_semantic_content = Command([
+        PathJoinSubstitution([FindExecutable(name="xacro")]),
+        " ",
+        PathJoinSubstitution([FindPackageShare(srdf_package), "srdf", srdf_file]),
+        " name:=ur",
+        " prefix:=", prefix,
+    ])
+    robot_description_semantic = {
+        "robot_description_semantic": ParameterValue(
+            robot_description_semantic_content, value_type=str
+        )
+    }
+    publish_robot_description_semantic_param = {
+        "publish_robot_description_semantic": publish_robot_description_semantic
+    }
+
+    robot_description_kinematics = PathJoinSubstitution(
+        [FindPackageShare("ur_setup_bringup"), "config", "kinematics.yaml"]
+    )
+
+    robot_description_planning = {
+        "robot_description_planning": load_yaml(
+            str(moveit_config_package.perform(context)),
+            os.path.join("config", str(moveit_joint_limits_file.perform(context))),
+        )
+    }
+
+    # OMPL
+    ompl_planning_pipeline_config = {
+        "move_group": {
+            "planning_plugin": "ompl_interface/OMPLPlanner",
+            "request_adapters": (
+                "default_planner_request_adapters/AddTimeOptimalParameterization "
+                "default_planner_request_adapters/FixWorkspaceBounds "
+                "default_planner_request_adapters/FixStartStateBounds "
+                "default_planner_request_adapters/FixStartStateCollision "
+                "default_planner_request_adapters/FixStartStatePathConstraints"
+            ),
+            "start_state_max_bounds_error": 0.1,
+        }
+    }
+    ompl_planning_yaml = load_yaml("ur_moveit_config", "config/ompl_planning.yaml")
+    ompl_planning_pipeline_config["move_group"].update(ompl_planning_yaml)
+
+    # 실물: MoveIt 의 default controller 를 scaled_joint_trajectory_controller 로 유지.
+    # ur_moveit_config/controllers.yaml 의 기본값이 이미 scaled.
+    controllers_yaml = load_yaml("ur_moveit_config", "config/controllers.yaml")
+    controllers_yaml["scaled_joint_trajectory_controller"]["default"] = True
+    controllers_yaml["joint_trajectory_controller"]["default"] = False
+
+    moveit_controllers = {
+        "moveit_simple_controller_manager": controllers_yaml,
+        "moveit_controller_manager":
+            "moveit_simple_controller_manager/MoveItSimpleControllerManager",
+    }
+
+    trajectory_execution = {
+        "moveit_manage_controllers":                          False,
+        "trajectory_execution.allowed_execution_duration_scaling": 1.2,
+        "trajectory_execution.allowed_goal_duration_margin":  0.5,
+        "trajectory_execution.allowed_start_tolerance":       0.01,
+        "trajectory_execution.execution_duration_monitoring": False,
+    }
+
+    planning_scene_monitor_parameters = {
+        "publish_planning_scene":    True,
+        "publish_geometry_updates":  True,
+        "publish_state_updates":     True,
+        "publish_transforms_updates": True,
+    }
+
+    warehouse_ros_config = {
+        "warehouse_plugin": "warehouse_ros_sqlite::DatabaseConnection",
+        "warehouse_host":   warehouse_sqlite_path,
+    }
+
+    move_group_node = Node(
+        package="moveit_ros_move_group",
+        executable="move_group",
+        output="screen",
+        parameters=[
+            robot_description,
+            robot_description_semantic,
+            publish_robot_description_semantic_param,
+            robot_description_kinematics,
+            robot_description_planning,
+            ompl_planning_pipeline_config,
+            trajectory_execution,
+            moveit_controllers,
+            planning_scene_monitor_parameters,
+            {"use_sim_time": False},
+            warehouse_ros_config,
+        ],
+    )
+
+    # ---------------- RViz ----------------
+    rviz_config_file = PathJoinSubstitution(
+        [FindPackageShare("ur_setup_bringup"), "rviz", "robot_model.rviz"]
+    )
+    rviz_node = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2_moveit",
+        output="log",
+        arguments=["-d", rviz_config_file],
+        condition=IfCondition(launch_rviz),
+        parameters=[
+            robot_description,
+            robot_description_semantic,
+            ompl_planning_pipeline_config,
+            robot_description_kinematics,
+            robot_description_planning,
+            warehouse_ros_config,
+            {"use_sim_time": False},
+        ],
+    )
+
+    # ---------------- MoveIt Servo (선택) ----------------
+    servo_yaml = load_yaml("ur_moveit_config", "config/ur_servo.yaml")
+    servo_params = {"moveit_servo": servo_yaml}
+    servo_node = Node(
+        package="moveit_servo",
+        executable="servo_node_main",
+        condition=IfCondition(launch_servo),
+        parameters=[
+            servo_params,
+            robot_description,
+            robot_description_semantic,
+            {"use_sim_time": False},
+        ],
+        output="screen",
+    )
+
+    # ---------------- 기동 순서 ----------------
+    # ros2_control 노드와 robot_state_publisher 가 먼저 뜨고,
+    # broadcaster 들 → trajectory / gripper controller 순서로 spawn 후 MoveIt 시작.
+    delayed_controllers_after_jsb = RegisterEventHandler(
+        OnProcessExit(
+            target_action=joint_state_broadcaster_spawner,
+            on_exit=[
+                io_and_status_controller_spawner,
+                speed_scaling_state_broadcaster_spawner,
+                force_torque_sensor_broadcaster_spawner,
+                initial_joint_controller_spawner_active,
+                initial_joint_controller_spawner_inactive,
+                robotiq_activation_controller_spawner,
+                robotiq_gripper_controller_spawner,
+            ],
+        )
+    )
+
+    moveit_start = TimerAction(period=5.0, actions=[move_group_node, rviz_node, servo_node])
+
+    return [
+        ur_control_node,
+        robot_state_publisher_node,
+        dashboard_client_node,
+        urscript_interface,
+        controller_stopper,
+        joint_state_broadcaster_spawner,
+        delayed_controllers_after_jsb,
+        moveit_start,
+    ]
+
+
+def generate_launch_description():
+    declared_arguments = []
+
+    # ---------------- UR / 안전 ----------------
+    declared_arguments.append(DeclareLaunchArgument(
+        "ur_type", default_value="ur16e",
+        description="UR 로봇 모델."))
+    declared_arguments.append(DeclareLaunchArgument(
+        "robot_ip", default_value="192.168.56.101",
+        description="실물 UR 컨트롤박스 IP."))
+    declared_arguments.append(DeclareLaunchArgument(
+        "safety_limits", default_value="true",
+        description="안전 한계 컨트롤러 활성화 여부."))
+    declared_arguments.append(DeclareLaunchArgument(
+        "safety_pos_margin", default_value="0.15"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "safety_k_position", default_value="20"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "prefix", default_value="",
+        description="조인트/링크 이름 prefix. 기본 빈 문자열."))
+    declared_arguments.append(DeclareLaunchArgument(
+        "headless_mode", default_value="false",
+        description="UR Polyscope 없이 외부 제어. Polyscope External Control URCap "
+                    "사용 시 false. headless 모드는 polyscope 5.10+ 필요."))
+
+    # ---------------- 컨트롤러 ----------------
+    declared_arguments.append(DeclareLaunchArgument(
+        "initial_joint_controller",
+        default_value="scaled_joint_trajectory_controller",
+        description="MoveIt 이 실행에 사용할 UR trajectory controller."))
+    declared_arguments.append(DeclareLaunchArgument(
+        "activate_joint_controller", default_value="false",
+        description=(
+            "true: UR trajectory controller 를 active 로 로드 (즉시 trajectory 실행 가능). "
+            "false(기본): --inactive 로 로드. 자동 모션 방지. "
+            "planning 검증 후 사용자가 다음 명령으로 활성화:\n"
+            "  ros2 control switch_controllers --activate scaled_joint_trajectory_controller"
+        )))
+    declared_arguments.append(DeclareLaunchArgument(
+        "launch_dashboard_client", default_value="true",
+        description="UR Dashboard 클라이언트 노드 실행 여부 (로봇 power on/off, brake release 등)."))
+
+    # ---------------- 그리퍼 ----------------
+    declared_arguments.append(DeclareLaunchArgument(
+        "gripper_com_port", default_value="/dev/ttyUSB0",
+        description="Robotiq 2F-85 USB-to-RS485 어댑터 경로. udev rule 권장."))
+
+    # ---------------- 테스트베드 캘리브레이션 ----------------
+    declared_arguments.append(DeclareLaunchArgument("pedestal_x", default_value="2.0"))
+    declared_arguments.append(DeclareLaunchArgument("pedestal_y", default_value="0.8"))
+    declared_arguments.append(DeclareLaunchArgument("pedestal_z", default_value="0.9",
+        description="페데스탈 상단까지의 높이 [m]. 로봇 base_link 가 z=pedestal_z 에 마운트됨."))
+    declared_arguments.append(DeclareLaunchArgument("plate_x", default_value="0.60",
+        description="좌측 plate 중심 X [robot base 프레임]."))
+    declared_arguments.append(DeclareLaunchArgument("plate_y", default_value="0.25"))
+    declared_arguments.append(DeclareLaunchArgument("pallet_x", default_value="-0.60"))
+    declared_arguments.append(DeclareLaunchArgument("pallet_y", default_value="0.35"))
+
+    # ---------------- MoveIt / RViz ----------------
+    declared_arguments.append(DeclareLaunchArgument(
+        "publish_robot_description_semantic", default_value="True"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "moveit_config_package", default_value="ur_moveit_config"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "srdf_package", default_value="ur_setup_bringup"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "srdf_file", default_value="ur_robotiq.srdf.xacro"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "moveit_joint_limits_file", default_value="joint_limits.yaml"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "warehouse_sqlite_path",
+        default_value=os.path.expanduser("~/.ros/warehouse_ros.sqlite")))
+    declared_arguments.append(DeclareLaunchArgument(
+        "launch_rviz", default_value="true"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "launch_servo", default_value="false",
+        description="MoveIt Servo. 실물에서는 기본 비활성화."))
+
+    return LaunchDescription(
+        declared_arguments + [OpaqueFunction(function=launch_setup)]
+    )
