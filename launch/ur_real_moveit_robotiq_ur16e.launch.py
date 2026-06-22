@@ -36,6 +36,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    ExecuteProcess,
     OpaqueFunction,
     RegisterEventHandler,
     TimerAction,
@@ -47,10 +48,11 @@ from launch.substitutions import (
     FindExecutable,
     LaunchConfiguration,
     PathJoinSubstitution,
+    PythonExpression,
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterFile, ParameterValue
-from launch_ros.substitutions import FindPackageShare
+from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 
 from ur_moveit_config.launch_common import load_yaml
 
@@ -66,7 +68,28 @@ def launch_setup(context, *args, **kwargs):
     headless_mode     = LaunchConfiguration("headless_mode")
 
     # ---------------- 그리퍼 인수 ----------------
-    gripper_com_port  = LaunchConfiguration("gripper_com_port")
+    # gripper_on_tool=true  → Robotiq 가 UR16e Tool I/O 에 연결됨.
+    #   PC 측 device 는 tool_communication.py 가 만드는 /tmp/ttyUR (PTY).
+    # gripper_on_tool=false → PC USB-RS485 어댑터 직결. gripper_com_port 인수 사용.
+    gripper_on_tool   = LaunchConfiguration("gripper_on_tool")
+    gripper_com_port_arg  = LaunchConfiguration("gripper_com_port")
+    tool_tcp_port     = LaunchConfiguration("tool_tcp_port")
+    tool_device_name  = LaunchConfiguration("tool_device_name")
+    tool_voltage      = LaunchConfiguration("tool_voltage")
+    tool_parity       = LaunchConfiguration("tool_parity")
+    tool_baud_rate    = LaunchConfiguration("tool_baud_rate")
+    tool_stop_bits    = LaunchConfiguration("tool_stop_bits")
+    tool_rx_idle_chars = LaunchConfiguration("tool_rx_idle_chars")
+    tool_tx_idle_chars = LaunchConfiguration("tool_tx_idle_chars")
+
+    # gripper_on_tool 에 따라 실제 그리퍼 device path / use_tool_communication 결정.
+    use_tool_communication = PythonExpression([
+        "'true' if '", gripper_on_tool, "' == 'true' else 'false'"
+    ])
+    gripper_com_port_effective = PythonExpression([
+        "'", tool_device_name, "' if '", gripper_on_tool, "' == 'true' else '",
+        gripper_com_port_arg, "'"
+    ])
 
     # ---------------- 테스트베드 캘리브레이션 인수 ----------------
     pedestal_x        = LaunchConfiguration("pedestal_x")
@@ -162,7 +185,18 @@ def launch_setup(context, *args, **kwargs):
         " script_filename:=",       script_filename,
         " input_recipe_filename:=", input_recipe_filename,
         " output_recipe_filename:=", output_recipe_filename,
-        " gripper_com_port:=",      gripper_com_port,
+        # Robotiq 시리얼 경로 — gripper_on_tool=true 면 /tmp/ttyUR (PTY).
+        " gripper_com_port:=",      gripper_com_port_effective,
+        # UR tool I/O 패스스루 (gripper_on_tool 과 연동)
+        " use_tool_communication:=", use_tool_communication,
+        " tool_voltage:=",          tool_voltage,
+        " tool_parity:=",           tool_parity,
+        " tool_baud_rate:=",        tool_baud_rate,
+        " tool_stop_bits:=",        tool_stop_bits,
+        " tool_rx_idle_chars:=",    tool_rx_idle_chars,
+        " tool_tx_idle_chars:=",    tool_tx_idle_chars,
+        " tool_device_name:=",      tool_device_name,
+        " tool_tcp_port:=",         tool_tcp_port,
         " pedestal_x:=",            pedestal_x,
         " pedestal_y:=",            pedestal_y,
         " pedestal_z:=",            pedestal_z,
@@ -174,6 +208,27 @@ def launch_setup(context, *args, **kwargs):
     robot_description = {
         "robot_description": ParameterValue(robot_description_content, value_type=str)
     }
+
+    # ---------------- UR Tool I/O ↔ PC PTY 터널 ----------------
+    # ur_client_library 의 tool_communication.py:
+    #   UR 컨트롤러의 TCP port 54321 (RS485 패스스루) ↔ /tmp/ttyUR (PTY)
+    # robotiq_driver hardware interface 는 /tmp/ttyUR 를 일반 시리얼로 열어 사용.
+    # gripper_on_tool=false 인 경우 (PC USB-RS485 직결) 에는 실행하지 않음.
+    tool_comm_path = PathJoinSubstitution([
+        FindPackagePrefix("ur_client_library"),
+        "lib", "ur_client_library", "tool_communication.py",
+    ])
+    tool_communication_script = ExecuteProcess(
+        name="ur_tool_comm",
+        condition=IfCondition(gripper_on_tool),
+        cmd=[
+            tool_comm_path,
+            robot_ip,
+            "--tcp-port", tool_tcp_port,
+            "--device-name", tool_device_name,
+        ],
+        output="screen",
+    )
 
     # ---------------- 실물 ros2_control 노드 ----------------
     ur_control_node = Node(
@@ -421,6 +476,7 @@ def launch_setup(context, *args, **kwargs):
     moveit_start = TimerAction(period=5.0, actions=[move_group_node, rviz_node, servo_node])
 
     return [
+        tool_communication_script,
         ur_control_node,
         robot_state_publisher_node,
         dashboard_client_node,
@@ -476,8 +532,42 @@ def generate_launch_description():
 
     # ---------------- 그리퍼 ----------------
     declared_arguments.append(DeclareLaunchArgument(
+        "gripper_on_tool", default_value="false",
+        choices=["true", "false"],
+        description=(
+            "true: Robotiq 가 UR16e Tool 커넥터에 연결됨. PC ↔ UR(TCP 54321) ↔ Tool RS485 "
+            "↔ Gripper 경로 사용. tool_communication.py 가 자동 실행되어 /tmp/ttyUR PTY 생성. "
+            "Polyscope 의 Installation → Tool I/O → Tool Output Voltage 를 24V, "
+            "Tool Communication Interface 를 Enable 로 설정해야 함. "
+            "false(기본): PC USB-RS485 어댑터 직결. gripper_com_port 인수로 device 지정."
+        )))
+    declared_arguments.append(DeclareLaunchArgument(
         "gripper_com_port", default_value="/dev/ttyUSB0",
-        description="Robotiq 2F-85 USB-to-RS485 어댑터 경로. udev rule 권장."))
+        description="gripper_on_tool=false 일 때만 사용. USB-RS485 어댑터 경로."))
+
+    # ---------------- UR Tool I/O 통신 파라미터 ----------------
+    # 모두 Robotiq 2F-85 권장 RS485 설정. gripper_on_tool=true 일 때만 의미 있음.
+    declared_arguments.append(DeclareLaunchArgument(
+        "tool_voltage", default_value="24",
+        description="Tool flange 출력 전압 [V]. Robotiq 2F-85 = 24V."))
+    declared_arguments.append(DeclareLaunchArgument(
+        "tool_parity", default_value="0",
+        description="0=None, 1=Odd, 2=Even"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "tool_baud_rate", default_value="115200"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "tool_stop_bits", default_value="1"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "tool_rx_idle_chars", default_value="1.5"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "tool_tx_idle_chars", default_value="3.5"))
+    declared_arguments.append(DeclareLaunchArgument(
+        "tool_device_name", default_value="/tmp/ttyUR",
+        description="tool_communication.py 가 생성할 PTY 경로. "
+                    "Robotiq driver 의 COM_port 로도 사용됨."))
+    declared_arguments.append(DeclareLaunchArgument(
+        "tool_tcp_port", default_value="54321",
+        description="UR 컨트롤러의 RS485 패스스루 TCP 포트."))
 
     # ---------------- 테스트베드 캘리브레이션 ----------------
     declared_arguments.append(DeclareLaunchArgument("pedestal_x", default_value="2.0"))
