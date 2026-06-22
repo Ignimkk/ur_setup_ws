@@ -286,9 +286,9 @@ def launch_setup(context, *args, **kwargs):
 
     colored_block_specs_all = [
         ("block_red",    "colored_block_red",    "0.42", "0.37", "0.96"),
-        ("block_green",  "colored_block_green",  "0.56", "0.37", "0.96"),
-        ("block_blue",   "colored_block_blue",   "0.42", "0.13", "0.96"),
-        ("block_yellow", "colored_block_yellow", "0.56", "0.13", "0.96"),
+        # Green / blue blocks are kept as assets but are not spawned by default.
+        # Yellow replaces the previous blue test object at the same pose.
+        ("block_yellow", "colored_block_yellow", "0.66", "0.37", "0.96"),
     ]
     colored_block_count = int(LaunchConfiguration("colored_block_count").perform(context))
     colored_block_count = max(0, min(colored_block_count, len(colored_block_specs_all)))
@@ -334,9 +334,9 @@ def launch_setup(context, *args, **kwargs):
     #       비용으로 RTF 가 급락하여 controller / action 응답이 지연된다.
     #       로봇이 먼저 안착한 뒤 알파벳을 추가하면 초기 부하 spike 를 회피한다.
     # DetachableJoint plugin 의 attachRequested 기본값이 true 라서
-    # alphabet 이 spawn 되는 순간 자동으로 wrist_3_link 에 attach 되어
-    # 9 개 letter 가 모두 robot 에 끌려가 떨어지는 문제가 있음.
-    # 대응: alphabet spawn 전에 detach 메시지를 미리 publish 하여 plugin 의
+    # object 가 spawn 되는 순간 자동으로 wrist_3_link 에 attach 되어
+    # plate 위 대상들이 robot 에 끌려가 떨어지는 문제가 있음.
+    # 대응: object spawn 전에 detach 메시지를 미리 publish 하여 plugin 의
     # detachRequested 를 true 로 만들어 둠. plugin source (PreUpdate) 가
     # 한 tick 안에 attach→detach 분기를 순차 실행하므로, alphabet 이 발견되어
     # attach 가 일어나는 같은 tick 에 즉시 detach 가 처리되어 letter 가
@@ -346,7 +346,7 @@ def launch_setup(context, *args, **kwargs):
         cmd=[
             "bash", "-c",
             # 0.2s 간격으로 15 번 = 약 3 초 동안 detach 트리거 유지.
-            # 이 윈도우가 alphabet spawn (가변 timing) 을 충분히 덮음.
+            # 이 윈도우가 object spawn (가변 timing) 을 충분히 덮음.
             "for i in $(seq 1 15); do "
             "ign topic -t /grasp/release_all "
             "-m ignition.msgs.Empty -p '' >/dev/null 2>&1; "
@@ -363,7 +363,7 @@ def launch_setup(context, *args, **kwargs):
             target_action=gz_spawn_entity,
             on_exit=[
                 # 1) 즉시 detach spam 시작 (백그라운드, ~3s 동안 발행)
-                *([detach_pre_spam] if object_type_value == "alphabet" else []),
+                *([detach_pre_spam] if object_type_value in ("alphabet", "colored_blocks") else []),
                 # 2) 10s 뒤 object spawn (detach spam 이 spawn 시점을 덮도록)
                 TimerAction(
                     period=10.0,
@@ -391,15 +391,20 @@ def launch_setup(context, *args, **kwargs):
         "alphabet_E2", "alphabet_B",  "alphabet_R",
         "alphabet_A",  "alphabet_I",  "alphabet_N",
     ]
+    colored_block_names = ["block_red", "block_yellow"]
+    detachable_names = (
+        alphabet_names if object_type_value == "alphabet"
+        else colored_block_names
+    )
     attach_bridge_args = [
         f"/grasp/attach/{n}@std_msgs/msg/Empty]ignition.msgs.Empty"
-        for n in alphabet_names
+        for n in detachable_names
     ]
     # /grasp/release_all 은 공용 detach 트리거 (ROS → Ign).
     # /grasp/state/<name> 은 plugin 의 상태 변화 알림 (Ign → ROS, 디버깅용).
     state_bridge_args = [
         f"/grasp/state/{n}@std_msgs/msg/String[ignition.msgs.StringMsg"
-        for n in alphabet_names
+        for n in detachable_names
     ]
 
     # 기본 브리지: /clock. 항상 활성화.
@@ -457,25 +462,21 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(enable_third_person_camera),
     )
 
-    # alphabet attach/detach 전용 브리지: enable_attach_detach=true 일 때만 실행.
+    # object attach/detach 브리지: enable_attach_detach=true 일 때만 실행.
     # 단일 Node 의 arguments 는 부분 비활성화가 불가능하므로 별도 노드로 분리.
-    gz_attach_detach_bridge = (
-        Node(
-            package="ros_gz_bridge",
-            executable="parameter_bridge",
-            arguments=[
-                # DetachableJoint attach 트리거 (ROS → Ign)
-                *attach_bridge_args,
-                # DetachableJoint 공용 detach 트리거 (ROS → Ign)
-                "/grasp/release_all@std_msgs/msg/Empty]ignition.msgs.Empty",
-                # DetachableJoint 상태 알림 (Ign → ROS, 디버깅)
-                *state_bridge_args,
-            ],
-            output="screen",
-            condition=IfCondition(enable_attach_detach),
-        )
-        if object_type_value == "alphabet"
-        else None
+    gz_attach_detach_bridge = Node(
+        package="ros_gz_bridge",
+        executable="parameter_bridge",
+        arguments=[
+            # DetachableJoint attach 트리거 (ROS → Ign)
+            *attach_bridge_args,
+            # DetachableJoint 공용 detach 트리거 (ROS → Ign)
+            "/grasp/release_all@std_msgs/msg/Empty]ignition.msgs.Empty",
+            # DetachableJoint 상태 알림 (Ign → ROS, 디버깅)
+            *state_bridge_args,
+        ],
+        output="screen",
+        condition=IfCondition(enable_attach_detach),
     )
 
     # ------------------------------------------------------------------ #
@@ -759,8 +760,8 @@ def generate_launch_description():
         ),
     ))
     declared_arguments.append(DeclareLaunchArgument(
-        "colored_block_count", default_value="4",
-        description="object_type:=colored_blocks 일 때 스폰할 색상 블록 개수 (0~4).",
+        "colored_block_count", default_value="2",
+        description="object_type:=colored_blocks 일 때 스폰할 색상 블록 개수 (0~2).",
     ))
     declared_arguments.append(DeclareLaunchArgument(
         "enable_wrist_camera_image", default_value="true",
@@ -805,11 +806,10 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument(
         "enable_attach_detach", default_value="true",
         description=(
-            "알파벳 DetachableJoint attach/detach 기능 활성화 여부. "
+            "알파벳/색상블럭 DetachableJoint attach/detach 기능 활성화 여부. "
             "true: /grasp/attach/<name>, /grasp/release_all, /grasp/state/<name> "
             "토픽 브리지와 사전 detach 메시지 발행이 모두 활성화됨. "
-            "false: 브리지 미생성 + 사전 detach 미발행. 알파벳은 plate 위에 "
-            "정적으로만 놓이고 pick/place 동작은 불가."
+            "false: 브리지 미생성 + 사전 detach 미발행."
         ),
     ))
 

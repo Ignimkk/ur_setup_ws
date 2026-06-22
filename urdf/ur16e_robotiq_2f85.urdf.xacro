@@ -312,9 +312,10 @@
     </gazebo>
 
     <!-- ================================================================
-         DetachableJoint 플러그인 (alphabet 잡기 RTF 회복용)
-         pick 직후 dispatcher 가 /grasp/attach/<letter> 에 publish 하면
-         해당 alphabet 이 tool0 와 fixed joint 로 묶여 contact 해석을 우회.
+         DetachableJoint 플러그인 (grasp 후 contact/collision 해석 회피용)
+         pick 직후 dispatcher/episode runner 가 /grasp/attach/<object> 에
+         publish 하면 해당 object 가 tool0 와 fixed joint 로 묶여 contact
+         해석을 우회.
          place 직전 pick_place_node 가 /grasp/release_all 에 publish 하여
          모든 attached letter 를 detach (한 번에 풀어도 안전, idempotent).
 
@@ -325,7 +326,7 @@
            9개 인스턴스를 별도 <gazebo> 블록으로 분리 (SDF 파서 안전).
            시작 시 isAttached=false (소스 확인) 라 명시 attach 전엔 dormant.
          ================================================================ -->
-    <xacro:macro name="alphabet_attach_plugin" params="model_name">
+    <xacro:macro name="detachable_joint_plugin" params="model_name">
       <gazebo>
         <plugin
           filename="ignition-gazebo-detachable-joint-system"
@@ -346,15 +347,19 @@
     </xacro:macro>
 
     <!-- launch/dispatcher 의 EDGE BRAIN sequence 순서와 동일하게 정렬 -->
-    <xacro:alphabet_attach_plugin model_name="alphabet_E1"/>
-    <xacro:alphabet_attach_plugin model_name="alphabet_D"/>
-    <xacro:alphabet_attach_plugin model_name="alphabet_G"/>
-    <xacro:alphabet_attach_plugin model_name="alphabet_E2"/>
-    <xacro:alphabet_attach_plugin model_name="alphabet_B"/>
-    <xacro:alphabet_attach_plugin model_name="alphabet_R"/>
-    <xacro:alphabet_attach_plugin model_name="alphabet_A"/>
-    <xacro:alphabet_attach_plugin model_name="alphabet_I"/>
-    <xacro:alphabet_attach_plugin model_name="alphabet_N"/>
+    <xacro:detachable_joint_plugin model_name="alphabet_E1"/>
+    <xacro:detachable_joint_plugin model_name="alphabet_D"/>
+    <xacro:detachable_joint_plugin model_name="alphabet_G"/>
+    <xacro:detachable_joint_plugin model_name="alphabet_E2"/>
+    <xacro:detachable_joint_plugin model_name="alphabet_B"/>
+    <xacro:detachable_joint_plugin model_name="alphabet_R"/>
+    <xacro:detachable_joint_plugin model_name="alphabet_A"/>
+    <xacro:detachable_joint_plugin model_name="alphabet_I"/>
+    <xacro:detachable_joint_plugin model_name="alphabet_N"/>
+
+    <!-- OpenVLA colored-block episode targets. -->
+    <xacro:detachable_joint_plugin model_name="block_red"/>
+    <xacro:detachable_joint_plugin model_name="block_yellow"/>
   </xacro:if>
 
   <xacro:if value="$(arg sim_gazebo)">
