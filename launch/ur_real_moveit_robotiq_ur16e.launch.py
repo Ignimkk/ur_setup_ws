@@ -78,6 +78,8 @@ def launch_setup(context, *args, **kwargs):
     # gripper_on_tool=false → PC USB-RS485 어댑터 직결. gripper_com_port 인수 사용.
     gripper_on_tool   = LaunchConfiguration("gripper_on_tool")
     gripper_com_port_arg  = LaunchConfiguration("gripper_com_port")
+    use_tool_communication = LaunchConfiguration("use_tool_communication")
+    enable_direct_robotiq_control = LaunchConfiguration("enable_direct_robotiq_control")
     tool_tcp_port     = LaunchConfiguration("tool_tcp_port")
     tool_device_name  = LaunchConfiguration("tool_device_name")
     tool_voltage      = LaunchConfiguration("tool_voltage")
@@ -87,13 +89,15 @@ def launch_setup(context, *args, **kwargs):
     tool_rx_idle_chars = LaunchConfiguration("tool_rx_idle_chars")
     tool_tx_idle_chars = LaunchConfiguration("tool_tx_idle_chars")
 
-    # gripper_on_tool 에 따라 실제 그리퍼 device path / use_tool_communication 결정.
-    use_tool_communication = PythonExpression([
-        "'true' if '", gripper_on_tool, "' == 'true' else 'false'"
-    ])
+    # use_tool_communication=true 일 때만 UR tool RS485 PTY(/tmp/ttyUR)를 사용한다.
+    # 기본 실물 구성은 URCap/teach pendant와 동일한 digital_out[1] 제어이므로
+    # tool communication과 Robotiq direct Modbus hardware를 켜지 않는다.
     gripper_com_port_effective = PythonExpression([
-        "'", tool_device_name, "' if '", gripper_on_tool, "' == 'true' else '",
+        "'", tool_device_name, "' if '", use_tool_communication, "' == 'true' else '",
         gripper_com_port_arg, "'"
+    ])
+    robotiq_use_fake_hardware = PythonExpression([
+        "'false' if '", enable_direct_robotiq_control, "' == 'true' else 'true'"
     ])
 
     # ---------------- 테스트베드 캘리브레이션 인수 ----------------
@@ -190,9 +194,11 @@ def launch_setup(context, *args, **kwargs):
         " script_filename:=",       script_filename,
         " input_recipe_filename:=", input_recipe_filename,
         " output_recipe_filename:=", output_recipe_filename,
-        # Robotiq 시리얼 경로 — gripper_on_tool=true 면 /tmp/ttyUR (PTY).
+        # Robotiq 시리얼 경로 — use_tool_communication=true 면 /tmp/ttyUR (PTY).
         " gripper_com_port:=",      gripper_com_port_effective,
-        # UR tool I/O 패스스루 (gripper_on_tool 과 연동)
+        " include_robotiq_ros2_control:=true",
+        " robotiq_use_fake_hardware:=", robotiq_use_fake_hardware,
+        # UR tool I/O 패스스루
         " use_tool_communication:=", use_tool_communication,
         " tool_voltage:=",          tool_voltage,
         " tool_parity:=",           tool_parity,
@@ -227,7 +233,8 @@ def launch_setup(context, *args, **kwargs):
         executable="tool_communication.py",
         name="ur_tool_comm",
         condition=IfCondition(PythonExpression([
-            "'", launch_control, "' == 'true' and '", gripper_on_tool, "' == 'true'"
+            "'", launch_control, "' == 'true' and '",
+            use_tool_communication, "' == 'true'"
         ])),
         output="screen",
         parameters=[
@@ -587,18 +594,31 @@ def generate_launch_description():
         "gripper_on_tool", default_value="true",
         choices=["true", "false"],
         description=(
-            "true: Robotiq 가 UR16e Tool 커넥터에 연결됨. PC ↔ UR(TCP 54321) ↔ Tool RS485 "
-            "↔ Gripper 경로 사용. tool_communication.py 가 자동 실행되어 /tmp/ttyUR PTY 생성. "
-            "Polyscope 의 Installation → Tool I/O → Tool Output Voltage 를 24V, "
-            "Tool Communication Interface 를 Enable 로 설정해야 함. "
+            "물리 배선 설명용 인수. true: Robotiq 가 UR16e Tool 커넥터에 연결됨. "
             "false: PC USB-RS485 어댑터 직결. gripper_com_port 인수로 device 지정."
         )))
     declared_arguments.append(DeclareLaunchArgument(
+        "use_tool_communication", default_value="false",
+        choices=["true", "false"],
+        description=(
+            "true일 때만 ur_robot_driver/tool_communication.py를 실행하고 "
+            "Robotiq COM_port를 /tmp/ttyUR로 설정. 기본 false: URCap에서 검증된 "
+            "digital_out[1] 제어 경로를 사용하며 /tmp/ttyUR에 의존하지 않음."
+        )))
+    declared_arguments.append(DeclareLaunchArgument(
+        "enable_direct_robotiq_control", default_value="false",
+        choices=["true", "false"],
+        description=(
+            "true: robotiq_driver/RobotiqGripperHardwareInterface를 사용해 직접 "
+            "Modbus RTU 제어를 시도. false(기본): gripper ros2_control hardware는 "
+            "fake로 유지하고 실제 gripper는 UR IO 서비스로 제어."
+        )))
+    declared_arguments.append(DeclareLaunchArgument(
         "gripper_com_port", default_value="/dev/ttyUSB0",
-        description="gripper_on_tool=false 일 때만 사용. USB-RS485 어댑터 경로."))
+        description="use_tool_communication=false 이면서 direct Robotiq를 쓸 때의 USB-RS485 경로."))
 
     # ---------------- UR Tool I/O 통신 파라미터 ----------------
-    # 모두 Robotiq 2F-85 권장 RS485 설정. gripper_on_tool=true 일 때만 의미 있음.
+    # 모두 Robotiq 2F-85 권장 RS485 설정. use_tool_communication=true 일 때만 의미 있음.
     declared_arguments.append(DeclareLaunchArgument(
         "tool_voltage", default_value="24",
         description="Tool flange 출력 전압 [V]. Robotiq 2F-85 = 24V."))

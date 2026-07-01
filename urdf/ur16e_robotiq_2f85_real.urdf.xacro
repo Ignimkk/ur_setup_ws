@@ -86,10 +86,16 @@
     default="$(find ur_setup_bringup)/config/initial_positions.yaml"/>
 
   <!-- ================================================================
-       Robotiq 2F-85 (실물 RS-485 어댑터) 인수
-         com_port: USB-to-RS485 어댑터 경로. udev rule 권장.
+       Robotiq 2F-85 제어 인수
+       기본값은 ROS2에서 Robotiq Modbus hardware를 직접 열지 않고,
+       URCap/teach pendant 프로그램과 동일하게 UR digital_out[1] 경로로
+       제어하는 구성이다. 직접 Modbus RTU를 검증할 때만
+       robotiq_use_fake_hardware:=false 및 use_tool_communication/gripper_com_port
+       값을 명시적으로 켠다.
        ================================================================ -->
   <xacro:arg name="gripper_com_port" default="/dev/ttyUSB0"/>
+  <xacro:arg name="include_robotiq_ros2_control" default="true"/>
+  <xacro:arg name="robotiq_use_fake_hardware" default="true"/>
 
   <!-- ================================================================
        테스트베드 치수/오프셋 인수
@@ -209,10 +215,12 @@
   </xacro:sensor_d435>
 
   <!-- ================================================================
-       Robotiq 2F-85 어댑터 + 그리퍼 (실물)
-         sim_ignition=false, use_fake_hardware=false
-         → robotiq_driver/RobotiqGripperHardwareInterface plugin 활성화.
-         com_port: USB-RS485 어댑터 경로.
+       Robotiq 2F-85 어댑터 + 그리퍼
+         기본: use_fake_hardware=true
+           → 실제 gripper 통신은 열지 않고 URDF/MoveIt 구조만 유지.
+              실물 gripper 명령은 UR digital_out[1] 서비스로 수행.
+         직접 Modbus RTU 테스트: robotiq_use_fake_hardware=false
+           → robotiq_driver/RobotiqGripperHardwareInterface plugin 사용.
        ================================================================ -->
   <xacro:ur_to_robotiq
     prefix="$(arg tf_prefix)"
@@ -223,9 +231,9 @@
     name="robotiq_2f_85"
     prefix="$(arg tf_prefix)"
     parent="$(arg tf_prefix)ur_to_robotiq_link"
-    include_ros2_control="true"
+    include_ros2_control="$(arg include_robotiq_ros2_control)"
     sim_ignition="false"
-    use_fake_hardware="false"
+    use_fake_hardware="$(arg robotiq_use_fake_hardware)"
     com_port="$(arg gripper_com_port)">
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </xacro:robotiq_gripper>

@@ -28,6 +28,8 @@ def generate_launch_description():
         DeclareLaunchArgument("initial_joint_controller",
                               default_value="scaled_joint_trajectory_controller"),
         DeclareLaunchArgument("gripper_on_tool", default_value="true"),
+        DeclareLaunchArgument("use_tool_communication", default_value="false"),
+        DeclareLaunchArgument("enable_direct_robotiq_control", default_value="false"),
         DeclareLaunchArgument("gripper_com_port", default_value="/dev/ttyUSB0"),
         DeclareLaunchArgument("headless_mode", default_value="false"),
         DeclareLaunchArgument("launch_dashboard_client", default_value="true"),
@@ -71,6 +73,10 @@ def generate_launch_description():
                     "initial_joint_controller",
                     default="scaled_joint_trajectory_controller"),
                 "gripper_on_tool": LaunchConfiguration("gripper_on_tool", default="true"),
+                "use_tool_communication": LaunchConfiguration(
+                    "use_tool_communication", default="false"),
+                "enable_direct_robotiq_control": LaunchConfiguration(
+                    "enable_direct_robotiq_control", default="false"),
                 "gripper_com_port": LaunchConfiguration(
                     "gripper_com_port", default="/dev/ttyUSB0"),
                 "headless_mode": LaunchConfiguration("headless_mode", default="false"),

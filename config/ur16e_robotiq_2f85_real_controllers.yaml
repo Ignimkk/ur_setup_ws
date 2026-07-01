@@ -14,6 +14,13 @@ controller_manager:
   ros__parameters:
     update_rate: 500  # Hz, UR16e 실시간 제어 주기
 
+    # Robotiq direct Modbus hardware는 startup 중 자동 configure/activate하지 않는다.
+    # 실물 기본 구성은 UR digital_out[1]로 gripper를 제어하므로 이 hardware가
+    # 불안정해도 UR controller_manager bring-up을 막지 않아야 한다.
+    hardware_components_initial_state:
+      unconfigured:
+        - robotiq_2f_85
+
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
