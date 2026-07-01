@@ -1,6 +1,6 @@
-# ur16e_robotiq_2f85_real_controllers.yaml
+# ur16e_robotiq_2f85_real_direct_controllers.yaml
 #
-# 실물 UR16e + Robotiq 2F-85 ros2_control 컨트롤러 설정.
+# 실물 UR16e + Robotiq 2F-85 direct Modbus 테스트용 ros2_control 컨트롤러 설정.
 # ur_ros2_control_node (ur_robot_driver) 가 이 파일을 읽어 controller_manager 를 구동.
 #
 # sim 용 ur16e_robotiq_2f85_controllers.yaml 과 차이점:
@@ -13,6 +13,14 @@
 controller_manager:
   ros__parameters:
     update_rate: 500  # Hz, UR16e 실시간 제어 주기
+
+    # Direct Modbus 모드에서는 /tmp/ttyUR 또는 USB-RS485가 실제 통신 가능해진 뒤
+    # 사용자가 명시적으로 robotiq_2f_85를 configure/activate해야 한다.
+    # startup 중 자동 활성화하면 통신 실패가 UR controller_manager bring-up을
+    # 방해할 수 있다.
+    hardware_components_initial_state:
+      unconfigured:
+        - robotiq_2f_85
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster

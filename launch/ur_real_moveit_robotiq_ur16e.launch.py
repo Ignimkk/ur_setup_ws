@@ -130,7 +130,11 @@ def launch_setup(context, *args, **kwargs):
     description_package   = "ur_setup_bringup"
     description_file      = "ur16e_robotiq_2f85_real.urdf.xacro"
     runtime_config_package = "ur_setup_bringup"
-    controllers_file      = "ur16e_robotiq_2f85_real_controllers.yaml"
+    controllers_file      = PythonExpression([
+        "'ur16e_robotiq_2f85_real_direct_controllers.yaml' if '",
+        enable_direct_robotiq_control,
+        "' == 'true' else 'ur16e_robotiq_2f85_real_controllers.yaml'"
+    ])
 
     controllers_file_path = PathJoinSubstitution(
         [FindPackageShare(runtime_config_package), "config", controllers_file]
