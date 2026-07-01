@@ -21,9 +21,11 @@ ur_real_moveit_robotiq_ur16e.launch.py
         --activate scaled_joint_trajectory_controller
 
 사용 예:
+  # Robotiq가 UR Tool RS485에 연결된 경우
   ros2 launch ur_setup_bringup ur_real_moveit_robotiq_ur16e.launch.py \
     robot_ip:=192.168.56.101 \
-    gripper_com_port:=/dev/ttyUSB0
+    gripper_on_tool:=true \
+    launch_rviz:=false
 
   # 실행 권한 부여 (자동 활성화):
   ros2 launch ur_setup_bringup ur_real_moveit_robotiq_ur16e.launch.py \
@@ -36,12 +38,11 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
-    ExecuteProcess,
     OpaqueFunction,
     RegisterEventHandler,
     TimerAction,
 )
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import (
     Command,
@@ -52,12 +53,16 @@ from launch.substitutions import (
 )
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterFile, ParameterValue
-from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
+from launch_ros.substitutions import FindPackageShare
 
 from ur_moveit_config.launch_common import load_yaml
 
 
 def launch_setup(context, *args, **kwargs):
+    # ---------------- 실행 분기 ----------------
+    launch_control = LaunchConfiguration("launch_control")
+    launch_moveit  = LaunchConfiguration("launch_moveit")
+
     # ---------------- UR / 안전 인수 ----------------
     ur_type           = LaunchConfiguration("ur_type")
     robot_ip          = LaunchConfiguration("robot_ip")
@@ -210,30 +215,35 @@ def launch_setup(context, *args, **kwargs):
     }
 
     # ---------------- UR Tool I/O ↔ PC PTY 터널 ----------------
-    # ur_client_library 의 tool_communication.py:
-    #   UR 컨트롤러의 TCP port 54321 (RS485 패스스루) ↔ /tmp/ttyUR (PTY)
-    # robotiq_driver hardware interface 는 /tmp/ttyUR 를 일반 시리얼로 열어 사용.
-    # gripper_on_tool=false 인 경우 (PC USB-RS485 직결) 에는 실행하지 않음.
-    tool_comm_path = PathJoinSubstitution([
-        FindPackagePrefix("ur_client_library"),
-        "lib", "ur_client_library", "tool_communication.py",
-    ])
-    tool_communication_script = ExecuteProcess(
+    # 공식 ur_robot_driver 방식:
+    #   UR 컨트롤러 TCP port 54321 ↔ /tmp/ttyUR(PTY)
+    #
+    # 중요:
+    #   tool_communication.py는 일반 CLI positional argument가 아니라 ROS 2
+    #   parameter(robot_ip, tcp_port, device_name)를 받는 노드로 실행해야 한다.
+    #   gripper_on_tool=false이면 PC USB-RS485 직결이므로 실행하지 않는다.
+    tool_communication_node = Node(
+        package="ur_robot_driver",
+        executable="tool_communication.py",
         name="ur_tool_comm",
-        condition=IfCondition(gripper_on_tool),
-        cmd=[
-            tool_comm_path,
-            robot_ip,
-            "--tcp-port", tool_tcp_port,
-            "--device-name", tool_device_name,
-        ],
+        condition=IfCondition(PythonExpression([
+            "'", launch_control, "' == 'true' and '", gripper_on_tool, "' == 'true'"
+        ])),
         output="screen",
+        parameters=[
+            {
+                "robot_ip": robot_ip,
+                "tcp_port": tool_tcp_port,
+                "device_name": tool_device_name,
+            }
+        ],
     )
 
     # ---------------- 실물 ros2_control 노드 ----------------
     ur_control_node = Node(
         package="ur_robot_driver",
         executable="ur_ros2_control_node",
+        condition=IfCondition(launch_control),
         parameters=[
             robot_description,
             update_rate_config_file,
@@ -246,6 +256,7 @@ def launch_setup(context, *args, **kwargs):
     robot_state_publisher_node = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
+        condition=IfCondition(launch_control),
         output="both",
         parameters=[{"use_sim_time": False}, robot_description],
     )
@@ -258,12 +269,16 @@ def launch_setup(context, *args, **kwargs):
         output="screen",
         emulate_tty=True,
         parameters=[{"robot_ip": robot_ip}],
-        condition=IfCondition(launch_dashboard_client),
+        condition=IfCondition(PythonExpression([
+            "'", launch_control, "' == 'true' and '",
+            launch_dashboard_client, "' == 'true'"
+        ])),
     )
 
     urscript_interface = Node(
         package="ur_robot_driver",
         executable="urscript_interface",
+        condition=IfCondition(launch_control),
         parameters=[{"robot_ip": robot_ip}],
         output="screen",
     )
@@ -272,6 +287,7 @@ def launch_setup(context, *args, **kwargs):
         package="ur_robot_driver",
         executable="controller_stopper_node",
         name="controller_stopper",
+        condition=IfCondition(launch_control),
         output="screen",
         emulate_tty=True,
         parameters=[
@@ -282,8 +298,6 @@ def launch_setup(context, *args, **kwargs):
                 "force_torque_sensor_broadcaster",
                 "joint_state_broadcaster",
                 "speed_scaling_state_broadcaster",
-                "robotiq_gripper_controller",
-                "robotiq_activation_controller",
             ]},
         ],
     )
@@ -294,7 +308,12 @@ def launch_setup(context, *args, **kwargs):
         if not active:
             args.append("--inactive")
         args.extend(extra_args)
-        return Node(package="controller_manager", executable="spawner", arguments=args)
+        return Node(
+            package="controller_manager",
+            executable="spawner",
+            arguments=args,
+            condition=IfCondition(launch_control),
+        )
 
     joint_state_broadcaster_spawner       = spawner("joint_state_broadcaster")
     io_and_status_controller_spawner      = spawner("io_and_status_controller")
@@ -307,18 +326,36 @@ def launch_setup(context, *args, **kwargs):
         package="controller_manager",
         executable="spawner",
         arguments=[initial_joint_controller, "-c", "/controller_manager"],
-        condition=IfCondition(activate_joint_controller),
+        condition=IfCondition(PythonExpression([
+            "'", launch_control, "' == 'true' and '",
+            activate_joint_controller, "' == 'true'"
+        ])),
     )
     initial_joint_controller_spawner_inactive = Node(
         package="controller_manager",
         executable="spawner",
         arguments=[initial_joint_controller, "-c", "/controller_manager", "--inactive"],
-        condition=UnlessCondition(activate_joint_controller),
+        condition=IfCondition(PythonExpression([
+            "'", launch_control, "' == 'true' and '",
+            activate_joint_controller, "' != 'true'"
+        ])),
     )
 
-    # Robotiq controller 들은 같은 controller_manager 안에 함께 로드.
-    robotiq_gripper_controller_spawner    = spawner("robotiq_gripper_controller")
-    robotiq_activation_controller_spawner = spawner("robotiq_activation_controller")
+    # Robotiq controller는 여기서 자동 spawn하지 않는다.
+    # 이유:
+    #   gripper_on_tool=true일 때 /tmp/ttyUR가 생성되기 전에 그리퍼 hardware가
+    #   configure되면 controller_manager 전체가 종료될 수 있다.
+    #
+    # controllers YAML의 hardware_components_initial_state에서
+    # robotiq_2f_85를 unconfigured로 시작한 뒤, /tmp/ttyUR 생성 확인 후
+    # 아래 순서로 수동 활성화한다.
+    #
+    #   ros2 control set_hardware_component_state robotiq_2f_85 inactive
+    #   ros2 control set_hardware_component_state robotiq_2f_85 active
+    #   ros2 run controller_manager spawner robotiq_activation_controller \
+    #     -c /controller_manager
+    #   ros2 run controller_manager spawner robotiq_gripper_controller \
+    #     -c /controller_manager
 
     # ---------------- MoveIt ----------------
     # SRDF (sim 과 동일 파일 — 링크/조인트 토폴로지가 같음)
@@ -467,16 +504,18 @@ def launch_setup(context, *args, **kwargs):
                 force_torque_sensor_broadcaster_spawner,
                 initial_joint_controller_spawner_active,
                 initial_joint_controller_spawner_inactive,
-                robotiq_activation_controller_spawner,
-                robotiq_gripper_controller_spawner,
             ],
         )
     )
 
-    moveit_start = TimerAction(period=5.0, actions=[move_group_node, rviz_node, servo_node])
+    moveit_start = TimerAction(
+        period=5.0,
+        actions=[move_group_node, rviz_node, servo_node],
+        condition=IfCondition(launch_moveit),
+    )
 
     return [
-        tool_communication_script,
+        tool_communication_node,
         ur_control_node,
         robot_state_publisher_node,
         dashboard_client_node,
@@ -490,6 +529,19 @@ def launch_setup(context, *args, **kwargs):
 
 def generate_launch_description():
     declared_arguments = []
+
+    # ---------------- 실행 분기 ----------------
+    declared_arguments.append(DeclareLaunchArgument(
+        "launch_control",
+        default_value="false",
+        description=(
+            "true: ur_robot_driver ros2_control 및 controller spawner 실행. "
+            "false(기본): MoveIt/RViz만 실행."
+        )))
+    declared_arguments.append(DeclareLaunchArgument(
+        "launch_moveit",
+        default_value="true",
+        description="true: move_group/RViz/Servo 실행."))
 
     # ---------------- UR / 안전 ----------------
     declared_arguments.append(DeclareLaunchArgument(
@@ -532,14 +584,14 @@ def generate_launch_description():
 
     # ---------------- 그리퍼 ----------------
     declared_arguments.append(DeclareLaunchArgument(
-        "gripper_on_tool", default_value="false",
+        "gripper_on_tool", default_value="true",
         choices=["true", "false"],
         description=(
             "true: Robotiq 가 UR16e Tool 커넥터에 연결됨. PC ↔ UR(TCP 54321) ↔ Tool RS485 "
             "↔ Gripper 경로 사용. tool_communication.py 가 자동 실행되어 /tmp/ttyUR PTY 생성. "
             "Polyscope 의 Installation → Tool I/O → Tool Output Voltage 를 24V, "
             "Tool Communication Interface 를 Enable 로 설정해야 함. "
-            "false(기본): PC USB-RS485 어댑터 직결. gripper_com_port 인수로 device 지정."
+            "false: PC USB-RS485 어댑터 직결. gripper_com_port 인수로 device 지정."
         )))
     declared_arguments.append(DeclareLaunchArgument(
         "gripper_com_port", default_value="/dev/ttyUSB0",
